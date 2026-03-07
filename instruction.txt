@@ -1,0 +1,11 @@
+terminal 1:
+mongod
+
+terminal 2:
+cd d:\vtb\backend
+.\venv\Scripts\Activate.ps1
+python -m uvicorn server:app --reload --host 127.0.0.1 --port 8000
+
+terminal 3:
+cd d:\vtb\frontend
+yarn start
