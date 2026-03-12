@@ -301,11 +301,102 @@ async def load_csv_flights():
 
     logger.info(f"CSV loading complete: {count} flights loaded")
 
+async def load_csv_restaurants():
+    """Load restaurants from CSV into the database.
+
+    Expects a file named 'indian_restaurants.csv' in the backend directory.
+
+    If the database already has some restaurants but fewer than a threshold,
+    we clear and reload to ensure the full dataset is available.
+    """
+    existing_restaurants = await db.restaurants.count_documents({})
+
+    # If we already have a large dataset, skip reloading.
+    if existing_restaurants >= 1000:
+        logger.info(f"Restaurants already loaded: {existing_restaurants} documents")
+        return
+
+    if existing_restaurants > 0:
+        logger.info(f"Restaurants collection is small ({existing_restaurants} docs), reloading from CSV")
+        await db.restaurants.delete_many({})
+
+    csv_path = ROOT_DIR / 'indian_restaurants.csv'
+    if not csv_path.exists():
+        logger.warning("indian_restaurants.csv not found, skipping restaurant seed")
+        return
+
+    logger.info("Loading restaurants from CSV...")
+    batch = []
+    batch_size = 1000
+    count = 0
+
+    def truthy(val):
+        if val is None:
+            return False
+        return str(val).strip().lower() in ("1", "true", "yes", "y")
+
+    def pick_cuisine(row):
+        if truthy(row.get("south_indian_or_not")):
+            return "South Indian"
+        if truthy(row.get("north_indian_or_not")):
+            return "North Indian"
+        if truthy(row.get("biryani_or_not")):
+            return "Biryani"
+        if truthy(row.get("fast_food_or_not")):
+            return "Fast Food"
+        if truthy(row.get("street_food")):
+            return "Street Food"
+        if truthy(row.get("bakery_or_not")):
+            return "Bakery"
+        return "Indian"
+
+    with open(csv_path, 'r', encoding='utf-8-sig', newline='') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            try:
+                rating = float(row.get("rating", 0) or 0)
+            except ValueError:
+                rating = 0.0
+
+            try:
+                avg_price = float(row.get("average_price", 0) or 0)
+            except ValueError:
+                avg_price = 0.0
+
+            restaurant = {
+                "id": str(uuid.uuid4()),
+                "name": row.get("restaurant_name", "").strip(),
+                "location": row.get("location", "").strip(),
+                "city": row.get("location", "").strip(),
+                "cuisine": pick_cuisine(row),
+                "avg_price": avg_price,
+                "rating": rating,
+                "platform": "Zomato",
+                "deal_url": "https://www.zomato.com",
+                "image_url": "",
+                "description": f"Average delivery time: {row.get('average _delivery_time', '').strip()} mins",
+            }
+            batch.append(restaurant)
+            count += 1
+
+            if len(batch) >= batch_size:
+                await db.restaurants.insert_many(batch)
+                batch = []
+                logger.info(f"Loaded {count} restaurants...")
+
+        if batch:
+            await db.restaurants.insert_many(batch)
+
+    logger.info(f"CSV loading complete: {count} restaurants loaded")
+
+
 async def seed_hotels_restaurants():
     existing_hotels = await db.hotels.count_documents({})
     if existing_hotels > 0:
+        # Still attempt to load restaurants if they are missing
+        await load_csv_restaurants()
         return
-    
+
     hotels_data = [
         {
             "id": str(uuid.uuid4()),
@@ -320,6 +411,7 @@ async def seed_hotels_restaurants():
             "image_url": "https://images.unsplash.com/photo-1566073771259-6a8506099945?w=800",
             "description": "Iconic luxury hotel with stunning sea views"
         },
+
         {
             "id": str(uuid.uuid4()),
             "name": "The Oberoi",
@@ -470,6 +562,9 @@ async def seed_hotels_restaurants():
     ]
     await db.restaurants.insert_many(restaurants_data)
     
+    # Load any additional restaurants from CSV, if available
+    await load_csv_restaurants()
+
     logger.info("Hotels and restaurants seeded")
 
 # ==================== AUTH ROUTES ====================
