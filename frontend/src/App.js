@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import "@/App.css";
 import axios from "axios";
 import { Button } from "@/components/ui/button";
@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Plane, Hotel, UtensilsCrossed, Search, ArrowRight, Star, Clock, MapPin, User, LogOut, Heart, Calendar, MessageCircle, Users } from "lucide-react";
+import { Plane, Hotel, UtensilsCrossed, Search, ArrowRight, Star, Clock, MapPin, User, LogOut, Heart, Calendar, MessageCircle, Users, Wallet as WalletIcon, Cloud, Sun, Moon } from "lucide-react";
 import { toast } from "sonner";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -33,6 +33,7 @@ function App() {
   const [hotels, setHotels] = useState([]);
   const [restaurants, setRestaurants] = useState([]);
   const [cities, setCities] = useState([]);
+  const [recommendations, setRecommendations] = useState({ cheapest_flights: [], cheapest_hotels: [] });
   const [loading, setLoading] = useState(false);
   
   // Profile
@@ -40,6 +41,9 @@ function App() {
   const [bookings, setBookings] = useState([]);
   const [profileName, setProfileName] = useState("");
   const [profilePhone, setProfilePhone] = useState("");
+
+  // Theme
+  const [theme, setTheme] = useState(localStorage.getItem("theme") || "light");
   
   // Travel Buddy
   const [showBuddy, setShowBuddy] = useState(false);
@@ -47,31 +51,73 @@ function App() {
   const [buddyDestination, setBuddyDestination] = useState("");
   const [buddyDates, setBuddyDates] = useState("");
   const [buddyMessage, setBuddyMessage] = useState("");
-  
+
+  // Chat / FAQ widget
+  const [showChat, setShowChat] = useState(false);
+  const [chatInput, setChatInput] = useState("");
+  const [chatMessages, setChatMessages] = useState([
+    { from: "bot", text: "Hi! I'm BudgetBot. Ask me something about flights, hotels, or how to use the app." },
+  ]);
+
+  // Reviews
+  const [showReview, setShowReview] = useState(false);
+  const [reviewTarget, setReviewTarget] = useState(null);
+  const [reviewRating, setReviewRating] = useState(5);
+  const [reviewComment, setReviewComment] = useState("");
+  const [reviewList, setReviewList] = useState([]);
+
+  // Wallet
+  const [showWallet, setShowWallet] = useState(false);
+  const [walletBalance, setWalletBalance] = useState(0);
+  const [walletAmount, setWalletAmount] = useState(0);
+
+  // Weather
+  const [weatherCity, setWeatherCity] = useState("");
+  const [weatherForecast, setWeatherForecast] = useState([]);
+
+  // Attractions / Tours
+  const [tourCity, setTourCity] = useState("");
+  const [tourDate, setTourDate] = useState("");
+  const [tourAttractions, setTourAttractions] = useState([]);
+
   // Flight filters
   const [flightSource, setFlightSource] = useState("");
   const [flightDestination, setFlightDestination] = useState("");
-  const [flightMaxPrice, setFlightMaxPrice] = useState("");
+  const [flightDate, setFlightDate] = useState("");
+  const [flightReturnDate, setFlightReturnDate] = useState("");
   const [flightStops, setFlightStops] = useState("");
+  const flightMaxPriceRef = useRef(null);
 
   // Hotel filters
   const [hotelCity, setHotelCity] = useState("");
-  const [hotelMaxPrice, setHotelMaxPrice] = useState("");
   const [hotelMinRating, setHotelMinRating] = useState("");
+  const hotelMaxPriceRef = useRef(null);
 
   // Restaurant filters
   const [restaurantCity, setRestaurantCity] = useState("");
   const [restaurantCuisine, setRestaurantCuisine] = useState("");
-  const [restaurantMaxPrice, setRestaurantMaxPrice] = useState("");
+  const restaurantMaxPriceRef = useRef(null);
 
   useEffect(() => {
     if (token) {
       setIsAuthenticated(true);
       fetchProfile();
+      fetchWallet();
     }
     fetchCities();
     searchFlights();
-  }, []);
+  }, [token]);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", theme === "dark");
+    localStorage.setItem("theme", theme);
+  }, [theme]);
+
+  useEffect(() => {
+    if (activeTab === "attractions" && !tourCity && cities.length) {
+      setTourCity(cities[0]);
+    }
+  }, [activeTab, cities, tourCity]);
 
   const fetchCities = async () => {
     try {
@@ -94,6 +140,8 @@ function App() {
       
       setToken(access_token);
       setUser(user);
+      setProfileName(user?.name || "");
+      setProfilePhone(user?.phone || "");
       setIsAuthenticated(true);
       localStorage.setItem("token", access_token);
       setShowAuth(false);
@@ -118,14 +166,23 @@ function App() {
 
   const updateProfile = async () => {
     try {
-      await axios.put(`${API}/profile`, 
+      await axios.put(
+        `${API}/profile`,
         { name: profileName, phone: profilePhone },
         { headers: { Authorization: `Bearer ${token}` } }
       );
       toast.success("Profile updated!");
       fetchProfile();
     } catch (error) {
-      toast.error("Failed to update profile");
+      const status = error.response?.status;
+      const detail = error.response?.data?.detail || error.message;
+      console.error("Profile update error:", status, detail);
+      if (status === 401) {
+        toast.error("Session expired, please log in again.");
+        handleLogout();
+        return;
+      }
+      toast.error(`Failed to update profile: ${detail}`);
     }
   };
 
@@ -148,13 +205,217 @@ function App() {
     toast.success("Logged out successfully");
   };
 
+  const getBotReply = (message) => {
+    const normalized = message.trim().toLowerCase();
+
+    const faqAnswers = [
+      {
+        question: "how do i search for flights",
+        answer: "Use the Flights tab and enter your origin, destination and dates. Then click 'Search Flights' to see results.",
+      },
+      {
+        question: "how do i save a booking",
+        answer: "Login first, then click 'Book Now' on any flight/hotel/restaurant result to save it to your bookings.",
+      },
+      {
+        question: "can i change my profile",
+        answer: "Open the profile panel (click your name in the top bar) to update your name or phone number.",
+      },
+      {
+        question: "how do i find travel buddies",
+        answer: "Click 'Need a Buddy?' in the top bar and post your trip details to find companions.",
+      },
+      {
+        question: "why are prices different",
+        answer: "We compare deals from multiple platforms. Prices can change often, so we always redirect you to the provider for the latest rate.",
+      },
+    ];
+
+    const match = faqAnswers.find((faq) => normalized.includes(faq.question));
+    if (match) return match.answer;
+
+    if (normalized.includes("flight")) {
+      return "Try the Flights tab and use the filters to find the best itinerary.";
+    }
+    if (normalized.includes("hotel")) {
+      return "Use the Hotels tab to compare nightly prices and view details before booking.";
+    }
+    if (normalized.includes("restaurant")) {
+      return "Check the Restaurants tab to find top-rated places and open the booking link.";
+    }
+    if (normalized.includes("login") || normalized.includes("sign in")) {
+      return "Click 'Login / Sign Up' in the top-right to access your account and save your bookings.";
+    }
+    if (normalized.includes("travel buddy") || normalized.includes("buddy")) {
+      return "Use the 'Need a Buddy?' button to post your travel plans and find others going to the same destination.";
+    }
+
+    return "I'm here to help! Ask me about searching flights, hotels, restaurants, or how to use the app.";
+  };
+
+  const sendChatMessage = () => {
+    const trimmed = chatInput.trim();
+    if (!trimmed) return;
+
+    setChatMessages((prev) => [...prev, { from: "user", text: trimmed }]);
+    setChatInput("");
+
+    const reply = getBotReply(trimmed);
+    setTimeout(() => {
+      setChatMessages((prev) => [...prev, { from: "bot", text: reply }]);
+    }, 300);
+  };
+
+  const fetchReviews = async (itemId) => {
+    try {
+      const response = await axios.get(`${API}/reviews`, { params: { item_id: itemId } });
+      setReviewList(response.data);
+    } catch (error) {
+      console.error("Error fetching reviews:", error);
+    }
+  };
+
+  const openReviewDialog = async (type, item) => {
+    if (!isAuthenticated) {
+      toast.error("Please login to write a review");
+      setShowAuth(true);
+      return;
+    }
+
+    setReviewTarget({ type, item });
+    setReviewRating(5);
+    setReviewComment("");
+    setShowReview(true);
+    await fetchReviews(item.id);
+  };
+
+  // Wallet helpers
+  const fetchWallet = async () => {
+    if (!isAuthenticated) return;
+    try {
+      const response = await axios.get(`${API}/wallet`, { headers: { Authorization: `Bearer ${token}` } });
+      setWalletBalance(response.data.balance || 0);
+    } catch (error) {
+      console.error("Error fetching wallet:", error);
+    }
+  };
+
+  const addWalletFunds = async () => {
+    if (!isAuthenticated) {
+      toast.error("Please login to add funds");
+      setShowAuth(true);
+      return;
+    }
+    try {
+      await axios.post(
+        `${API}/wallet/add`,
+        { amount: parseFloat(walletAmount) || 0 },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      toast.success("Wallet topped up!");
+      setWalletAmount(0);
+      fetchWallet();
+    } catch (error) {
+      console.error("Error adding funds:", error);
+      toast.error("Failed to add funds");
+    }
+  };
+
+  // Weather helpers
+  const fetchWeather = async (city) => {
+    try {
+      const response = await axios.get(`${API}/weather`, { params: { city } });
+      setWeatherForecast(response.data.forecast || []);
+    } catch (error) {
+      console.error("Error fetching weather:", error);
+      toast.error("Could not load weather");
+    }
+  };
+
+  const fetchAttractions = async (city, date) => {
+    if (!city) {
+      toast.error("Please select a city for tours");
+      return;
+    }
+
+    try {
+      const response = await axios.get(`${API}/attractions`, {
+        params: { city, date },
+      });
+      setTourAttractions(response.data.attractions || []);
+    } catch (error) {
+      console.error("Error fetching attractions:", error);
+      const message = error.response?.data?.detail || "Could not load attractions";
+      toast.error(message);
+    }
+  };
+
+  const openWeather = (city) => {
+    const selectedCity = city || (cities.length ? cities[0] : "Mumbai");
+    if (!selectedCity) {
+      toast.error("Please select a city to view weather");
+      return;
+    }
+
+    setWeatherCity(selectedCity);
+    setWeatherForecast([]);
+    fetchWeather(selectedCity);
+  };
+
+
+
+  const submitReview = async () => {
+    if (!isAuthenticated) {
+      toast.error("Please login to submit a review");
+      setShowAuth(true);
+      return;
+    }
+
+    if (!reviewTarget) return;
+
+    if (!reviewComment.trim()) {
+      toast.error("Please add a comment to submit a review");
+      return;
+    }
+
+    if (reviewRating < 1 || reviewRating > 5) {
+      toast.error("Rating must be between 1 and 5");
+      return;
+    }
+
+    try {
+      await axios.post(
+        `${API}/reviews`,
+        {
+          item_id: reviewTarget.item.id,
+          item_type: reviewTarget.type,
+          rating: reviewRating,
+          comment: reviewComment,
+        },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      toast.success("Review submitted!");
+      setReviewComment("");
+      setReviewRating(5);
+      await fetchReviews(reviewTarget.item.id);
+    } catch (error) {
+      console.error("Error submitting review:", error);
+      const errMsg = error.response?.data?.detail || error.response?.data || error.message;
+      toast.error(`Failed to submit review: ${errMsg}`);
+    }
+  };
+
   const searchFlights = async () => {
     setLoading(true);
     try {
       const params = {};
       if (flightSource) params.source = flightSource;
       if (flightDestination) params.destination = flightDestination;
-      if (flightMaxPrice) params.max_price = flightMaxPrice;
+      if (flightDate) params.departure_date = flightDate;
+      if (flightReturnDate) params.return_date = flightReturnDate;
+      const flightMaxPriceValue = flightMaxPriceRef.current?.value || "";
+      const flightMaxPriceNumeric = parseFloat(flightMaxPriceValue);
+      if (!Number.isNaN(flightMaxPriceNumeric)) params.max_price = flightMaxPriceNumeric;
       if (flightStops) params.stops = flightStops;
 
       const response = await axios.get(`${API}/flights`, { params });
@@ -173,7 +434,9 @@ function App() {
     try {
       const params = {};
       if (hotelCity) params.city = hotelCity;
-      if (hotelMaxPrice) params.max_price = hotelMaxPrice;
+      const hotelMaxPriceValue = hotelMaxPriceRef.current?.value || "";
+      const hotelMaxPriceNumeric = parseFloat(hotelMaxPriceValue);
+      if (!Number.isNaN(hotelMaxPriceNumeric)) params.max_price = hotelMaxPriceNumeric;
       if (hotelMinRating) params.min_rating = hotelMinRating;
 
       const response = await axios.get(`${API}/hotels`, { params });
@@ -193,7 +456,9 @@ function App() {
       const params = {};
       if (restaurantCity) params.city = restaurantCity;
       if (restaurantCuisine) params.cuisine = restaurantCuisine;
-      if (restaurantMaxPrice) params.max_price = restaurantMaxPrice;
+      const restaurantMaxPriceValue = restaurantMaxPriceRef.current?.value || "";
+      const restaurantMaxPriceNumeric = parseFloat(restaurantMaxPriceValue);
+      if (!Number.isNaN(restaurantMaxPriceNumeric)) params.max_price = restaurantMaxPriceNumeric;
 
       const response = await axios.get(`${API}/restaurants`, { params });
       setRestaurants(response.data);
@@ -206,12 +471,121 @@ function App() {
     }
   };
 
-  const handleBooking = async (type, item) => {
+  const getRedirectUrl = (type, item, date, returnDate) => {
+    // For flights we use Google Flights search with the source/destination prefilled
+    const getAirportCode = (city) => {
+      if (!city) return "";
+      const normalized = city.trim().toUpperCase();
+      const mapping = {
+        DELHI: "DEL",
+        MUMBAI: "BOM",
+        BENGALURU: "BLR",
+        BANGALORE: "BLR",
+        CHENNAI: "MAA",
+        HYDERABAD: "HYD",
+        KOLKATA: "CCU",
+        GOA: "GOI",
+        JAIPUR: "JAI",
+        PUNE: "PNQ",
+        AHMEDABAD: "AMD",
+        COIMBATORE: "CJB",
+        TRIVANDRUM: "TRV",
+        VADODARA: "BDQ",
+        LUCKNOW: "LKO",
+      };
+      return mapping[normalized] || normalized.slice(0, 3);
+    };
+
+    const dateParam = date ? date : item.departure_date;
+    const returnParam = returnDate ? returnDate : item.return_date;
+
+    if (type === "flight") {
+      const srcCode = getAirportCode(item.source_city);
+      const dstCode = getAirportCode(item.destination_city);
+      const departure = dateParam || "";
+      const ret = returnParam || "";
+
+      // Airline-specific booking URLs (common ones) so users go to the search page, not homepage.
+      const airlineKey = (item.airline || "").toString().trim().toUpperCase().replace(/\s+/g, "_");
+      const airlineUrls = {
+        INDIGO: (s, d, dep, ret) =>
+          `https://www.goindigo.in/?origin=${s}&destination=${d}&departDate=${dep}${ret ? `&returnDate=${ret}` : ""}`,
+        SPICEJET: (s, d, dep, ret) =>
+          `https://book.spicejet.com/?origin=${s}&destination=${d}&tripType=O&departureDate=${dep}${ret ? `&returnDate=${ret}` : ""}`,
+        VISTARA: (s, d, dep, ret) =>
+          `https://www.airvistara.com/in/en/book-flight?departureStation=${s}&arrivalStation=${d}&departureDate=${dep}${ret ? `&returnDate=${ret}` : ""}`,
+        GO_FIRST: (s, d, dep, ret) =>
+          `https://book.gofirst.com/flights?from=${s}&to=${d}&depart=${dep}${ret ? `&return=${ret}` : ""}`,
+        AIR_ASIA: (s, d, dep, ret) =>
+          `https://www.airasia.com/en/gb?origin=${s}&destination=${d}&departureDate=${dep}${ret ? `&returnDate=${ret}` : ""}`,
+        AIR_INDIA: (s, d, dep, ret) =>
+          `https://www.airindia.in/booking/flight-search.htm?origin=${s}&destination=${d}&departureDate=${dep}${ret ? `&returnDate=${ret}` : ""}`,
+      };
+
+      if (airlineUrls[airlineKey]) {
+        return airlineUrls[airlineKey](srcCode, dstCode, departure, ret);
+      }
+
+      // Use the platform/deal_url if it exists and is a valid URL
+      if (item.deal_url) {
+        try {
+          const url = new URL(item.deal_url);
+          url.searchParams.set("origin", srcCode);
+          url.searchParams.set("destination", dstCode);
+          if (departure) url.searchParams.set("departDate", departure);
+          if (ret) url.searchParams.set("returnDate", ret);
+          return url.toString();
+        } catch (e) {
+          // if item.deal_url is not a valid URL, fall back to Google Flights
+        }
+      }
+
+      // Fallback to Google Flights
+      const retPart = ret ? `*${dstCode}.${srcCode}.${ret}` : "";
+      return `https://www.google.com/flights?hl=en#flt=${srcCode}.${dstCode}.${departure}${retPart}`;
+    }
+
+    // For hotels we direct to a search / booking page on the corresponding platform
+    if (type === "hotel") {
+      const city = encodeURIComponent(item.city || item.location || "");
+      const hotelName = encodeURIComponent(item.name || "");
+
+      if (item.platform?.toLowerCase().includes("booking")) {
+        return `https://www.booking.com/searchresults.html?ss=${city}`;
+      }
+      if (item.platform?.toLowerCase().includes("makemytrip")) {
+        return `https://www.makemytrip.com/hotels/?city=${city}`;
+      }
+      if (item.platform?.toLowerCase().includes("agoda")) {
+        return `https://www.agoda.com/search?city=${city}`;
+      }
+      if (item.platform?.toLowerCase().includes("expedia")) {
+        return `https://www.expedia.co.in/Hotel-Search?destination=${city}`;
+      }
+
+      // Fallback: Google Hotels search
+      return `https://www.google.com/travel/hotels?q=${city}`;
+    }
+
+    // For restaurants we direct to Google Maps with the cuisine/city
+    if (type === "restaurant") {
+      const city = encodeURIComponent(item.city || item.location || "");
+      const cuisine = encodeURIComponent(item.cuisine || "");
+      const query = `${cuisine}${cuisine && city ? " in " : ""}${city}`.trim();
+      return `https://www.google.com/maps/search/${query}`;
+    }
+
+    return item.deal_url;
+  };
+
+  const handleBooking = async (type, item, date, returnDate) => {
     if (!isAuthenticated) {
       toast.error("Please login to save bookings");
       setShowAuth(true);
       return;
     }
+
+    const redirectUrl = getRedirectUrl(type, item, date, returnDate);
 
     try {
       await axios.post(
@@ -220,10 +594,12 @@ function App() {
         { headers: { Authorization: `Bearer ${token}` } }
       );
       toast.success("Booking saved! Redirecting...");
-      window.open(item.deal_url, "_blank");
+      console.log("Redirecting to:", redirectUrl);
+      window.open(redirectUrl, "_blank");
     } catch (error) {
       toast.error("Failed to save booking");
-      window.open(item.deal_url, "_blank");
+      console.log("Redirecting to (fallback):", redirectUrl);
+      window.open(redirectUrl, "_blank");
     }
   };
 
@@ -310,6 +686,36 @@ function App() {
                   <Users className="nav-icon" />
                   Need a Buddy?
                 </Button>
+                <Button 
+                  variant="ghost"
+                  className="nav-btn"
+                  onClick={() => {
+                    setShowWallet(true);
+                    fetchWallet();
+                  }}
+                  data-testid="wallet-btn"
+                >
+                  <WalletIcon className="nav-icon" />
+                  Wallet
+                </Button>
+                <Button 
+                  variant="ghost"
+                  className="nav-btn"
+                  onClick={() => openWeather(user?.preferences?.defaultCity || "")}
+                  data-testid="weather-btn"
+                >
+                  <Cloud className="nav-icon" />
+                  Weather
+                </Button>
+                <Button 
+                  variant="ghost"
+                  className="nav-btn"
+                  onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
+                  data-testid="theme-toggle-btn"
+                >
+                  {theme === "dark" ? <Sun className="nav-icon" /> : <Moon className="nav-icon" />}
+                  {theme === "dark" ? "Light" : "Dark"}
+                </Button>
                 <Button variant="ghost" className="nav-btn" onClick={handleLogout} data-testid="logout-btn">
                   <LogOut className="nav-icon" />
                 </Button>
@@ -363,6 +769,14 @@ function App() {
               <UtensilsCrossed className="tab-icon" />
               Restaurants
             </TabsTrigger>
+            <TabsTrigger value="weather" className="tab-trigger" data-testid="tab-weather">
+              <Cloud className="tab-icon" />
+              Weather
+            </TabsTrigger>
+            <TabsTrigger value="attractions" className="tab-trigger" data-testid="tab-attractions">
+              <MapPin className="tab-icon" />
+              Tours
+            </TabsTrigger>
           </TabsList>
 
           {/* Flights Tab */}
@@ -404,12 +818,30 @@ function App() {
                     </Select>
                   </div>
                   <div className="filter-group">
+                    <label className="filter-label">Departure Date</label>
+                    <Input
+                      type="date"
+                      value={flightDate}
+                      onChange={(e) => setFlightDate(e.target.value)}
+                      data-testid="flight-date-input"
+                    />
+                  </div>
+                  <div className="filter-group">
+                    <label className="filter-label">Return Date</label>
+                    <Input
+                      type="date"
+                      value={flightReturnDate}
+                      onChange={(e) => setFlightReturnDate(e.target.value)}
+                      data-testid="flight-return-date-input"
+                    />
+                  </div>
+                  <div className="filter-group">
                     <label className="filter-label">Max Price (₹)</label>
                     <Input
-                      type="number"
+                      type="text"
+                      inputMode="numeric"
                       placeholder="e.g., 8000"
-                      value={flightMaxPrice}
-                      onChange={(e) => setFlightMaxPrice(e.target.value)}
+                      ref={flightMaxPriceRef}
                       data-testid="flight-max-price-input"
                     />
                   </div>
@@ -480,13 +912,28 @@ function App() {
                           <div className="platform">{flight.platform}</div>
                         </div>
                       </div>
-                      <Button
-                        className="book-btn"
-                        onClick={() => handleBooking("flight", flight)}
-                        data-testid={`flight-book-btn-${index}`}
-                      >
-                        Book Now <ArrowRight className="btn-icon" />
-                      </Button>
+                      <div className="card-actions">
+                        <Button
+                          className="book-btn"
+                          onClick={() => handleBooking(
+                            "flight",
+                            flight,
+                            flightDate || flight.departure_date,
+                            flightReturnDate || flight.return_date
+                          )}
+                          data-testid={`flight-book-btn-${index}`}
+                        >
+                          Book Now <ArrowRight className="btn-icon" />
+                        </Button>
+                        <Button
+                          variant="outline"
+                          className="review-btn"
+                          onClick={() => openReviewDialog("flight", flight)}
+                          data-testid={`flight-review-btn-${index}`}
+                        >
+                          Write Review
+                        </Button>
+                      </div>
                     </CardContent>
                   </Card>
                 ))}
@@ -522,10 +969,10 @@ function App() {
                   <div className="filter-group">
                     <label className="filter-label">Max Price per Night (₹)</label>
                     <Input
-                      type="number"
+                      type="text"
+                      inputMode="numeric"
                       placeholder="e.g., 10000"
-                      value={hotelMaxPrice}
-                      onChange={(e) => setHotelMaxPrice(e.target.value)}
+                      ref={hotelMaxPriceRef}
                       data-testid="hotel-max-price-input"
                     />
                   </div>
@@ -585,13 +1032,23 @@ function App() {
                           <div className="platform">{hotel.platform}</div>
                         </div>
                       </div>
-                      <Button
-                        className="book-btn"
-                        onClick={() => handleBooking("hotel", hotel)}
-                        data-testid={`hotel-book-btn-${index}`}
-                      >
-                        Book Now <ArrowRight className="btn-icon" />
-                      </Button>
+                      <div className="card-actions">
+                        <Button
+                          className="book-btn"
+                          onClick={() => handleBooking("hotel", hotel)}
+                          data-testid={`hotel-book-btn-${index}`}
+                        >
+                          Book Now <ArrowRight className="btn-icon" />
+                        </Button>
+                        <Button
+                          variant="outline"
+                          className="review-btn"
+                          onClick={() => openReviewDialog("hotel", hotel)}
+                          data-testid={`hotel-review-btn-${index}`}
+                        >
+                          Write Review
+                        </Button>
+                      </div>
                     </CardContent>
                   </Card>
                 ))}
@@ -637,10 +1094,10 @@ function App() {
                   <div className="filter-group">
                     <label className="filter-label">Max Avg Price (₹)</label>
                     <Input
-                      type="number"
+                      type="text"
+                      inputMode="numeric"
                       placeholder="e.g., 3000"
-                      value={restaurantMaxPrice}
-                      onChange={(e) => setRestaurantMaxPrice(e.target.value)}
+                      ref={restaurantMaxPriceRef}
                       data-testid="restaurant-max-price-input"
                     />
                   </div>
@@ -686,18 +1143,166 @@ function App() {
                           <div className="platform">{restaurant.platform}</div>
                         </div>
                       </div>
-                      <Button
-                        className="book-btn"
-                        onClick={() => handleBooking("restaurant", restaurant)}
-                        data-testid={`restaurant-book-btn-${index}`}
-                      >
-                        View on {restaurant.platform} <ArrowRight className="btn-icon" />
-                      </Button>
+                      <div className="card-actions">
+                        <Button
+                          className="book-btn"
+                          onClick={() => handleBooking("restaurant", restaurant)}
+                          data-testid={`restaurant-book-btn-${index}`}
+                        >
+                          View on {restaurant.platform} <ArrowRight className="btn-icon" />
+                        </Button>
+                        <Button
+                          variant="outline"
+                          className="review-btn"
+                          onClick={() => openReviewDialog("restaurant", restaurant)}
+                          data-testid={`restaurant-review-btn-${index}`}
+                        >
+                          Write Review
+                        </Button>
+                      </div>
                     </CardContent>
                   </Card>
                 ))}
               </div>
             </div>
+          </TabsContent>
+
+          {/* Weather Tab */}
+          <TabsContent value="weather" className="tab-content">
+            <Card className="filter-card">
+              <CardHeader>
+                <CardTitle className="filter-title">
+                  <Cloud className="filter-icon" />
+                  Weather Forecast
+                </CardTitle>
+                <CardDescription>See 7‑day forecast for a city</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="filter-grid">
+                  <div className="filter-group">
+                    <label className="filter-label">City</label>
+                    <Select value={weatherCity} onValueChange={openWeather}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select city" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {cities.map((city) => (
+                          <SelectItem key={city} value={city}>{city}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="filter-group">
+                    <Button onClick={() => fetchWeather(weatherCity)} className="search-btn" disabled={loading || !weatherCity} data-testid="weather-search-btn">
+                      <Search className="btn-icon" />
+                      Get Forecast
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {weatherForecast.length > 0 && (
+              <div className="results-container">
+                <h2 className="results-title">Forecast for {weatherCity}</h2>
+                <div className="results-grid">
+                  {weatherForecast.map((day, idx) => (
+                    <Card key={idx} className="result-card weather-card">
+                      <CardContent>
+                        <div className="result-details">
+                          <div className="result-row">
+                            <span className="detail-label">{day.date}</span>
+                          </div>
+                          <div className="result-row">
+                            <span>High: {day.temp_max}°C</span>
+                          </div>
+                          <div className="result-row">
+                            <span>Low: {day.temp_min}°C</span>
+                          </div>
+                          {day.precip !== null && (
+                            <div className="result-row">
+                              <span>Precip: {day.precip} mm</span>
+                            </div>
+                          )}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              </div>
+            )}
+          </TabsContent>
+
+          {/* Attractions / Tours Tab */}
+          <TabsContent value="attractions" className="tab-content">
+            <Card className="filter-card">
+              <CardHeader>
+                <CardTitle className="filter-title">
+                  <MapPin className="filter-icon" />
+                  Tours & Attractions
+                </CardTitle>
+                <CardDescription>See things to do in a city for a selected day.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="filter-grid">
+                  <div className="filter-group">
+                    <label className="filter-label">City</label>
+                    <Select value={tourCity} onValueChange={setTourCity}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select city" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {cities.map((city) => (
+                          <SelectItem key={city} value={city}>{city}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="filter-group">
+                    <label className="filter-label">Date</label>
+                    <Input
+                      type="date"
+                      value={tourDate}
+                      onChange={(e) => setTourDate(e.target.value)}
+                      data-testid="tour-date-input"
+                    />
+                  </div>
+                  <div className="filter-group">
+                    <Button
+                      onClick={() => fetchAttractions(tourCity, tourDate)}
+                      className="search-btn"
+                      disabled={loading || !tourCity || !tourDate}
+                      data-testid="tour-search-btn"
+                    >
+                      <Search className="btn-icon" />
+                      Find Tours
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {tourAttractions.length > 0 && (
+              <div className="results-container">
+                <h2 className="results-title">Things to do in {tourCity} on {tourDate}</h2>
+                <div className="results-grid">
+                  {tourAttractions.map((item, idx) => (
+                    <Card key={idx} className="result-card">
+                      <CardContent>
+                        <div className="result-details">
+                          <div className="result-row">
+                            <span className="detail-label">{item.name}</span>
+                          </div>
+                          <div className="result-row">
+                            <span>{item.description}</span>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              </div>
+            )}
           </TabsContent>
         </Tabs>
       </div>
@@ -880,6 +1485,128 @@ function App() {
                 ))
               )}
             </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Review Dialog */}
+      <Dialog open={showReview} onOpenChange={setShowReview}>
+        <DialogContent className="chat-dialog" data-testid="review-dialog">
+          <DialogHeader>
+            <DialogTitle>{reviewTarget ? `Reviews for ${reviewTarget.item.name || reviewTarget.item.flight || "item"}` : "Reviews"}</DialogTitle>
+            <DialogDescription>Share your feedback and read what others are saying.</DialogDescription>
+          </DialogHeader>
+
+          <div className="chat-messages" data-testid="review-messages">
+            {reviewList.length === 0 ? (
+              <div className="chat-message chat-message-bot">No reviews yet. Be the first to leave one!</div>
+            ) : (
+              reviewList.map((review) => (
+                <div key={review.id} className="chat-message chat-message-bot">
+                  <div className="chat-message-text">
+                    <strong>{review.user_email}</strong> • {review.rating}⭐
+                    <div style={{ marginTop: 6 }}>{review.comment}</div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="chat-input-row">
+            <Input
+              type="number"
+              min={1}
+              max={5}
+              placeholder="Rating (1-5)"
+              value={reviewRating}
+              onChange={(e) => setReviewRating(Number(e.target.value))}
+              data-testid="review-rating-input"
+            />
+            <Input
+              placeholder="Write your review..."
+              value={reviewComment}
+              onChange={(e) => setReviewComment(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && submitReview()}
+              data-testid="review-comment-input"
+            />
+            <Button onClick={submitReview} className="chat-send-btn" data-testid="review-submit-btn">
+              Submit
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Wallet Dialog */}
+      <Dialog open={showWallet} onOpenChange={setShowWallet}>
+        <DialogContent className="chat-dialog" data-testid="wallet-dialog">
+          <DialogHeader>
+            <DialogTitle>My Wallet</DialogTitle>
+            <DialogDescription>Balance and add funds</DialogDescription>
+          </DialogHeader>
+          <div className="chat-messages">
+            <div className="chat-message chat-message-bot">
+              <div className="chat-message-text">
+                Current balance: ₹{walletBalance.toLocaleString()}
+              </div>
+            </div>
+          </div>
+          <div className="chat-input-row">
+            <Input
+              type="number"
+              min={0}
+              placeholder="Amount to add"
+              value={walletAmount}
+              onChange={(e) => setWalletAmount(e.target.value)}
+              data-testid="wallet-amount-input"
+            />
+            <Button onClick={addWalletFunds} className="chat-send-btn" data-testid="wallet-add-btn">
+              Add
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Chat / FAQ widget */}
+      <button className="chat-button" onClick={() => setShowChat(true)} data-testid="open-chat-btn">
+        <MessageCircle className="chat-icon" />
+        <span>Need help?</span>
+      </button>
+
+      <Dialog open={showChat} onOpenChange={setShowChat}>
+        <DialogContent className="chat-dialog" data-testid="chat-dialog">
+          <DialogHeader>
+            <DialogTitle>BudgetBot</DialogTitle>
+            <DialogDescription>Ask a question or browse the FAQ below.</DialogDescription>
+          </DialogHeader>
+
+          <div className="chat-messages" data-testid="chat-messages">
+            {chatMessages.map((msg, idx) => (
+              <div key={idx} className={`chat-message chat-message-${msg.from}`}>
+                <div className="chat-message-text">{msg.text}</div>
+              </div>
+            ))}
+          </div>
+
+          <div className="chat-input-row">
+            <Input
+              placeholder="Type your question..."
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && sendChatMessage()}
+              data-testid="chat-input"
+            />
+            <Button onClick={sendChatMessage} className="chat-send-btn" data-testid="chat-send-btn">
+              Send
+            </Button>
+          </div>
+
+          <div className="chat-faq">
+            <h4>FAQ</h4>
+            <ul>
+              <li>How do I search for flights?</li>
+              <li>How do I save a booking?</li>
+              <li>How do I find travel buddies?</li>
+            </ul>
           </div>
         </DialogContent>
       </Dialog>

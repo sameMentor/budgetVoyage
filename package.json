@@ -1,0 +1,13 @@
+{
+  "name": "budget-voyage-root",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "start": "concurrently \"cd backend && uvicorn server:app --reload --port 8000\" \"cd frontend && npm start\"",
+    "start:backend": "cd backend && uvicorn server:app --reload --port 8000",
+    "start:frontend": "cd frontend && npm start"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.0"
+  }
+}
