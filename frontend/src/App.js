@@ -109,6 +109,15 @@ function App() {
   }, [token]);
 
   useEffect(() => {
+    // Automatically load restaurant recommendations when cities are available.
+    if (cities.length && !restaurantCity) {
+      const defaultCity = cities[0];
+      setRestaurantCity(defaultCity);
+      searchRestaurants(defaultCity, "");
+    }
+  }, [cities, restaurantCity]);
+
+  useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
     localStorage.setItem("theme", theme);
   }, [theme]);
@@ -276,12 +285,8 @@ function App() {
   };
 
   const openReviewDialog = async (type, item) => {
-    if (!isAuthenticated) {
-      toast.error("Please login to write a review");
-      setShowAuth(true);
-      return;
-    }
-
+    // Allow opening the review dialog even when not authenticated so users can see existing reviews
+    // and prepare their review before logging in.
     setReviewTarget({ type, item });
     setReviewRating(5);
     setReviewComment("");
@@ -450,19 +455,41 @@ function App() {
     }
   };
 
-  const searchRestaurants = async () => {
+  const searchRestaurants = async (overrideCity, overrideCuisine) => {
+    const params = {};
+    const city = overrideCity ?? restaurantCity;
+    const cuisine = overrideCuisine ?? restaurantCuisine;
+    console.log('searchRestaurants called', {overrideCity, city, overrideCuisine, cuisine});
+
     setLoading(true);
     try {
-      const params = {};
-      if (restaurantCity) params.city = restaurantCity;
-      if (restaurantCuisine) params.cuisine = restaurantCuisine;
+      if (city) params.city = city;
+      if (cuisine) params.cuisine = cuisine;
       const restaurantMaxPriceValue = restaurantMaxPriceRef.current?.value || "";
       const restaurantMaxPriceNumeric = parseFloat(restaurantMaxPriceValue);
       if (!Number.isNaN(restaurantMaxPriceNumeric)) params.max_price = restaurantMaxPriceNumeric;
 
+      console.log('params', params);
+
       const response = await axios.get(`${API}/restaurants`, { params });
-      setRestaurants(response.data);
-      toast.success(`Found ${response.data.length} restaurants`);
+      const restaurantsFound = response.data || [];
+
+      // If no results found and a cuisine filter was applied, retry without cuisine.
+      if (restaurantsFound.length === 0 && cuisine) {
+        const retryParams = { ...params };
+        delete retryParams.cuisine;
+        const retryResponse = await axios.get(`${API}/restaurants`, { params: retryParams });
+        const retryResults = retryResponse.data || [];
+        setRestaurants(retryResults);
+        if (retryResults.length > 0) {
+          toast.success(`No restaurants matched "${cuisine}" - showing all in ${city || "selected city"}`);
+        } else {
+          toast.success(`Found ${retryResults.length} restaurants`);
+        }
+      } else {
+        setRestaurants(restaurantsFound);
+        toast.success(`Found ${restaurantsFound.length} restaurants`);
+      }
     } catch (error) {
       console.error("Error fetching restaurants:", error);
       toast.error("Failed to fetch restaurants");
@@ -1070,7 +1097,7 @@ function App() {
                 <div className="filter-grid">
                   <div className="filter-group">
                     <label className="filter-label">City</label>
-                    <Select value={restaurantCity} onValueChange={setRestaurantCity}>
+                    <Select value={restaurantCity} onValueChange={(val) => { setRestaurantCity(val); searchRestaurants(val, restaurantCuisine); }}>
                       <SelectTrigger data-testid="restaurant-city-select">
                         <SelectValue placeholder="Select city" />
                       </SelectTrigger>
@@ -1512,6 +1539,11 @@ function App() {
             )}
           </div>
 
+          {!isAuthenticated && (
+            <div className="review-warning" style={{ color: "#f97316", marginBottom: "0.5rem" }}>
+              Please log in to submit a review.
+            </div>
+          )}
           <div className="chat-input-row">
             <Input
               type="number"
@@ -1529,7 +1561,12 @@ function App() {
               onKeyDown={(e) => e.key === "Enter" && submitReview()}
               data-testid="review-comment-input"
             />
-            <Button onClick={submitReview} className="chat-send-btn" data-testid="review-submit-btn">
+            <Button
+              onClick={submitReview}
+              className="chat-send-btn"
+              data-testid="review-submit-btn"
+              disabled={!isAuthenticated}
+            >
               Submit
             </Button>
           </div>
