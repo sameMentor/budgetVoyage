@@ -19,6 +19,24 @@ node_modules/
 # Testing
 /coverage
 
+# Cache files
+frontend/node_modules/.cache/
+backend/__pycache__/
+tests/__pycache__/
+.venv/
+emergent/
+
+# Cache files
+frontend/node_modules/.cache/
+backend/__pycache__/
+*.pyc
+__pycache__/
+
+# Environment files
+.env
+frontend/.env
+backend/.env
+
 # Next.js
 /.next/
 /out/
