@@ -19,6 +19,7 @@ node_modules/
 # Testing
 /coverage
 
+<<<<<<< HEAD
 # Cache files
 frontend/node_modules/.cache/
 backend/__pycache__/
@@ -37,6 +38,8 @@ __pycache__/
 frontend/.env
 backend/.env
 
+=======
+>>>>>>> 97c3a57434d65a1e9e9fa6a84276966fc7406e96
 # Next.js
 /.next/
 /out/
@@ -49,7 +52,10 @@ dist/
 dist
 
 # Environment files (comprehensive coverage)
-
+# Environment variables
+.env
+.env.local
+.env.*
 *token.json*
 *credentials.json*
 
@@ -93,6 +99,17 @@ agenthub/agents/youtube/db
 
 # Build caches
 .cache/
+<<<<<<< HEAD
 
 # Mobile development
 android-sdk/ 
+=======
+/frontend/node_modules/.cache/
+/frontend/node_modules/.cache/**
+
+# Mobile development
+android-sdk/ 
+
+frontend/node_modules/
+frontend/node_modules/.cache/
+>>>>>>> 97c3a57434d65a1e9e9fa6a84276966fc7406e96

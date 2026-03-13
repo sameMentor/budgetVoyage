@@ -219,6 +219,11 @@ body {
   z-index: 2;
 }
 
+.main-content.profile-page {
+  margin: 2rem auto 0;
+  padding-top: 1.5rem;
+}
+
 .tabs-container {
   background: transparent;
 }
@@ -314,6 +319,17 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+}
+
+.station-search {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.station-search .search-btn {
+  padding: 0.55rem 1rem;
+  min-width: 90px;
 }
 
 .filter-label {

@@ -12,6 +12,7 @@ import uuid
 from datetime import datetime, timezone, timedelta
 import bcrypt
 import jwt
+from jwt import PyJWTError
 import csv
 import random
 import requests
@@ -111,6 +112,36 @@ class Restaurant(BaseModel):
     image_url: str
     description: str
 
+class Attraction(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    city: str
+    state: str
+    attraction_type: str
+    rating: float
+    entrance_fee: float
+    time_needed_hours: float
+    significance: str
+    best_time: str
+    weekly_off: str
+    dslr_allowed: str
+
+class Train(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    train_number: str
+    train_name: str
+    source_station_code: str
+    destination_station_code: str
+    departure_time: Optional[str] = None
+    arrival_time: Optional[str] = None
+    travel_time: Optional[str] = None
+    run_days: Optional[List[str]] = []
+    available_classes: Optional[List[str]] = []
+    train_type: Optional[str] = None
+    booking_url: Optional[str] = None
+
 class Booking(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -124,6 +155,78 @@ class BookingCreate(BaseModel):
     booking_type: str
     item_id: str
     item_details: dict
+
+class ItineraryItem(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_email: str
+    item_type: str  # attraction, flight, hotel, restaurant, train
+    item_id: str
+    item_details: dict
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+class ItineraryCreate(BaseModel):
+    item_type: str
+    item_id: str
+    item_details: dict
+
+class SavedTrip(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_email: str
+    title: str
+    trip_details: dict
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+class SavedTripCreate(BaseModel):
+    title: str
+    trip_details: dict
+
+class TripPlanRequest(BaseModel):
+    city: str
+    budget: float
+    start_date: str  # YYYY-MM-DD
+    end_date: str    # YYYY-MM-DD
+    people: int = 1
+    travel_mode: Optional[str] = None
+    interests: Optional[List[str]] = None
+
+class TripPlanDay(BaseModel):
+    date: str
+    attractions: List[Attraction]
+    estimated_cost: float
+
+class TripPlanResponse(BaseModel):
+    city: str
+    budget: float
+    people: int
+    days: int
+    travel_mode: Optional[str] = None
+    total_estimated_cost: float
+    remaining_budget: float
+    plan: List[TripPlanDay]
+
+class RecommendationRequest(BaseModel):
+    from_city: Optional[str] = None
+    city: str
+    budget: float
+    start_date: str
+    end_date: str
+    people: int = 1
+    travel_mode: str = "Train"
+    interests: Optional[List[str]] = None
+
+class RecommendationResponse(BaseModel):
+    city: str
+    budget: float
+    people: int
+    days: int
+    travel_mode: str
+    transport: Optional[dict] = None
+    hotel: Optional[dict] = None
+    plan: List[dict]
+    total_estimated_cost: float
+    remaining_budget: float
 
 class TravelBuddy(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -199,7 +302,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         return email
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired")
-    except jwt.JWTError:
+    except PyJWTError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
 
@@ -567,6 +670,58 @@ async def seed_hotels_restaurants():
 
     logger.info("Hotels and restaurants seeded")
 
+async def load_csv_attractions():
+    existing = await db.attractions.count_documents({})
+    if existing > 0:
+        logger.info(f"Attractions already loaded: {existing} documents")
+        return
+
+    csv_path = ROOT_DIR / 'attractions.csv'
+    if not csv_path.exists():
+        logger.warning("attractions.csv not found")
+        return
+
+    logger.info("Loading attractions from CSV...")
+    batch = []
+    batch_size = 1000
+
+    def to_float(value: str) -> float:
+        try:
+            return float(value)
+        except Exception:
+            return 0.0
+
+    with open(csv_path, 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        count = 0
+        for row in reader:
+            doc = {
+                "id": str(uuid.uuid4()),
+                "name": row.get("Name", "") or "",
+                "city": row.get("City", "") or "",
+                "state": row.get("State", "") or "",
+                "attraction_type": row.get("Type", "") or "",
+                "rating": to_float(row.get("Google review rating", "")),
+                "entrance_fee": to_float(row.get("Entrance Fee in INR", "")),
+                "time_needed_hours": to_float(row.get("time needed to visit in hrs", "")),
+                "significance": row.get("Significance", "") or "",
+                "best_time": row.get("Best Time to visit", "") or "",
+                "weekly_off": row.get("Weekly Off", "") or "",
+                "dslr_allowed": row.get("DSLR Allowed", "") or "",
+            }
+            batch.append(doc)
+            count += 1
+
+            if len(batch) >= batch_size:
+                await db.attractions.insert_many(batch)
+                batch = []
+                logger.info(f"Loaded {count} attractions...")
+
+        if batch:
+            await db.attractions.insert_many(batch)
+
+    logger.info(f"CSV loading complete: {count} attractions loaded")
+
 # ==================== AUTH ROUTES ====================
 
 @api_router.post("/auth/register")
@@ -643,6 +798,165 @@ async def create_booking(booking: BookingCreate, current_user: str = Depends(get
 async def get_bookings(current_user: str = Depends(get_current_user)):
     bookings = await db.bookings.find({"user_email": current_user}, {"_id": 0}).to_list(1000)
     return bookings
+
+# ==================== ITINERARY ROUTES ====================
+
+@api_router.post("/itinerary", response_model=ItineraryItem)
+async def create_itinerary_item(item: ItineraryCreate, current_user: str = Depends(get_current_user)):
+    itinerary_obj = ItineraryItem(
+        user_email=current_user,
+        item_type=item.item_type,
+        item_id=item.item_id,
+        item_details=item.item_details,
+    )
+    doc = itinerary_obj.model_dump()
+    await db.itineraries.insert_one(doc)
+    return itinerary_obj
+
+@api_router.get("/itinerary", response_model=List[ItineraryItem])
+async def get_itinerary(current_user: str = Depends(get_current_user)):
+    items = await db.itineraries.find({"user_email": current_user}, {"_id": 0}).to_list(1000)
+    return items
+
+@api_router.delete("/itinerary/{item_id}")
+async def delete_itinerary_item(item_id: str, current_user: str = Depends(get_current_user)):
+    result = await db.itineraries.delete_one({"user_email": current_user, "id": item_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Itinerary item not found")
+    return {"message": "Itinerary item removed"}
+
+# ==================== SAVED TRIPS ====================
+
+@api_router.post("/trips/saved", response_model=SavedTrip)
+async def save_trip(trip: SavedTripCreate, current_user: str = Depends(get_current_user)):
+    saved = SavedTrip(
+        user_email=current_user,
+        title=trip.title,
+        trip_details=trip.trip_details,
+    )
+    await db.saved_trips.insert_one(saved.model_dump())
+    return saved
+
+@api_router.get("/trips/saved", response_model=List[SavedTrip])
+async def get_saved_trips(current_user: str = Depends(get_current_user)):
+    items = await db.saved_trips.find({"user_email": current_user}, {"_id": 0}).to_list(1000)
+    return items
+
+@api_router.delete("/trips/saved/{trip_id}")
+async def delete_saved_trip(trip_id: str, current_user: str = Depends(get_current_user)):
+    result = await db.saved_trips.delete_one({"user_email": current_user, "id": trip_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Saved trip not found")
+    return {"message": "Saved trip removed"}
+
+# ==================== TRIP PLANNER ====================
+
+@api_router.post("/trip/plan", response_model=TripPlanResponse)
+async def plan_trip(request: TripPlanRequest):
+    if request.budget <= 0:
+        raise HTTPException(status_code=400, detail="Budget must be greater than 0")
+    if request.people <= 0:
+        raise HTTPException(status_code=400, detail="People must be at least 1")
+
+    try:
+        start_dt = datetime.fromisoformat(request.start_date)
+        end_dt = datetime.fromisoformat(request.end_date)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Dates must be in YYYY-MM-DD format")
+
+    if end_dt < start_dt:
+        raise HTTPException(status_code=400, detail="End date must be after start date")
+
+    days = (end_dt.date() - start_dt.date()).days + 1
+    per_day_budget = request.budget / max(days, 1)
+
+    query = {"city": {"$regex": request.city, "$options": "i"}}
+    attractions = await db.attractions.find(query, {"_id": 0}).to_list(500)
+
+    if request.interests:
+        interests = [i.strip().lower() for i in request.interests if i.strip()]
+        if interests:
+            filtered = []
+            for a in attractions:
+                sig = str(a.get("significance", "")).lower()
+                a_type = str(a.get("attraction_type", "")).lower()
+                if any(i in sig or i in a_type for i in interests):
+                    filtered.append(a)
+            attractions = filtered
+
+    attractions.sort(key=lambda x: (-x.get("rating", 0), x.get("entrance_fee", 0)))
+
+    used_ids = set()
+    plan = []
+    total_cost = 0.0
+
+    for offset in range(days):
+        day_date = (start_dt.date() + timedelta(days=offset)).isoformat()
+        day_budget = per_day_budget
+        day_items = []
+        day_cost = 0.0
+
+        for a in attractions:
+            if a.get("id") in used_ids:
+                continue
+            cost = float(a.get("entrance_fee", 0)) * request.people
+            if day_cost + cost <= day_budget:
+                day_items.append(a)
+                day_cost += cost
+                used_ids.add(a.get("id"))
+            if day_cost >= day_budget:
+                break
+
+        if not day_items and attractions:
+            for a in attractions:
+                if a.get("id") in used_ids:
+                    continue
+                day_items.append(a)
+                used_ids.add(a.get("id"))
+                day_cost += float(a.get("entrance_fee", 0)) * request.people
+                break
+
+        plan.append(
+            TripPlanDay(
+                date=day_date,
+                attractions=day_items,
+                estimated_cost=round(day_cost, 2),
+            )
+        )
+        total_cost += day_cost
+
+    remaining = max(0.0, round(request.budget - total_cost, 2))
+
+    return TripPlanResponse(
+        city=request.city,
+        budget=request.budget,
+        people=request.people,
+        days=days,
+        travel_mode=request.travel_mode,
+        total_estimated_cost=round(total_cost, 2),
+        remaining_budget=remaining,
+        plan=plan,
+    )
+
+@api_router.post("/recommendations", response_model=RecommendationResponse)
+async def get_recommendations(request: RecommendationRequest):
+    from services import recommender_service
+    if request.budget <= 0:
+        raise HTTPException(status_code=400, detail="Budget must be greater than 0")
+    if request.people <= 0:
+        raise HTTPException(status_code=400, detail="People must be at least 1")
+
+    result = recommender_service.recommend_trip(
+        from_city=request.from_city,
+        to_city=request.city,
+        budget=request.budget,
+        start_date=request.start_date,
+        end_date=request.end_date,
+        people=request.people,
+        travel_mode=request.travel_mode,
+        interests=request.interests,
+    )
+    return result
 
 # ==================== TRAVEL BUDDY ROUTES ====================
 
@@ -841,6 +1155,7 @@ async def get_reviews(
     return reviews
 
 # ==================== FLIGHTS ROUTES ====================
+from services import flight_service
 
 @api_router.get("/flights")
 async def get_flights(
@@ -852,6 +1167,18 @@ async def get_flights(
     return_date: Optional[str] = Query(None),
     limit: int = Query(50, le=200)
 ):
+    # try external provider first
+    external = await flight_service.search_flights(
+        source=source,
+        destination=destination,
+        max_price=max_price,
+        stops=stops,
+        limit=min(limit, 20),
+    )
+    if external is not None:
+        return external
+
+    # fallback to seeded mongodb data
     query = {}
     if source:
         query["source_city"] = {"$regex": source, "$options": "i"}
@@ -868,6 +1195,7 @@ async def get_flights(
     return flights
 
 # ==================== HOTELS ROUTES ====================
+from services import booking_service
 
 @api_router.get("/hotels", response_model=List[Hotel])
 async def get_hotels(
@@ -875,6 +1203,17 @@ async def get_hotels(
     max_price: Optional[float] = Query(None),
     min_rating: Optional[float] = Query(None)
 ):
+    # attempt live lookup
+    external = await booking_service.search_hotels(
+        city=city,
+        max_price=max_price,
+        min_rating=min_rating,
+        limit=20,
+    )
+    if external is not None:
+        return external
+
+    # fallback to DB
     query = {}
     if city:
         query["city"] = {"$regex": city, "$options": "i"}
@@ -888,6 +1227,7 @@ async def get_hotels(
     return hotels
 
 # ==================== RESTAURANTS ROUTES ====================
+from services import tripadvisor_service
 
 @api_router.get("/restaurants", response_model=List[Restaurant])
 async def get_restaurants(
@@ -896,6 +1236,16 @@ async def get_restaurants(
     max_price: Optional[float] = Query(None),
     min_rating: Optional[float] = Query(None)
 ):
+    external = await tripadvisor_service.search_restaurants(
+        city=city,
+        cuisine=cuisine,
+        max_price=max_price,
+        min_rating=min_rating,
+        limit=20,
+    )
+    if external is not None:
+        return external
+
     query = {}
     if city:
         query["city"] = {"$regex": city, "$options": "i"}
@@ -910,6 +1260,84 @@ async def get_restaurants(
     restaurants.sort(key=lambda x: x["avg_price"])
     return restaurants
 
+# ==================== ATTRACTIONS ROUTES ====================
+
+@api_router.get("/attractions", response_model=List[Attraction])
+async def get_attractions(
+    city: Optional[str] = Query(None),
+    max_fee: Optional[float] = Query(None),
+    min_rating: Optional[float] = Query(None)
+):
+    query = {}
+    if city:
+        query["city"] = {"$regex": city, "$options": "i"}
+    if max_fee is not None:
+        query["entrance_fee"] = {"$lte": max_fee}
+    if min_rating is not None:
+        query["rating"] = {"$gte": min_rating}
+
+    attractions = await db.attractions.find(query, {"_id": 0}).to_list(1000)
+    attractions.sort(key=lambda x: (-x.get("rating", 0), x.get("entrance_fee", 0)))
+    return attractions
+
+# ==================== TRAINS ROUTES ====================
+from services import train_service
+
+@api_router.get("/trains", response_model=List[Train])
+async def get_trains(
+    query: Optional[str] = Query(None),
+    limit: int = Query(20, le=100)
+):
+    external = await train_service.search_trains(query=query, limit=limit)
+    if external is not None:
+        return external
+    return []
+
+@api_router.get("/stations")
+async def get_stations(
+    query: Optional[str] = Query(None),
+    limit: int = Query(20, le=100)
+):
+    external = await train_service.search_stations(query=query, limit=limit)
+    if external is not None:
+        return external
+    return []
+
+@api_router.get("/trains/between", response_model=List[Train])
+async def get_trains_between(
+    from_station: Optional[str] = Query(None, alias="from"),
+    to_station: Optional[str] = Query(None, alias="to"),
+    date: Optional[str] = Query(None),
+    limit: int = Query(50, le=200)
+):
+    external = await train_service.search_trains_between(
+        from_station=from_station,
+        to_station=to_station,
+        travel_date=date,
+        limit=limit,
+    )
+    if external is not None:
+        return external
+    return []
+
+@api_router.get("/trains/between-cities", response_model=List[Train])
+async def get_trains_between_cities(
+    from_city: Optional[str] = Query(None),
+    to_city: Optional[str] = Query(None),
+    date: Optional[str] = Query(None),
+    limit: int = Query(50, le=200)
+):
+    external = await train_service.search_trains_between_cities(
+        from_city=from_city,
+        to_city=to_city,
+        travel_date=date,
+        station_limit=3,
+        limit=limit,
+    )
+    if external is not None:
+        return external
+    return []
+
 # ==================== CITIES ROUTE ====================
 
 @api_router.get("/cities")
@@ -918,8 +1346,9 @@ async def get_cities():
     flight_destinations = await db.flights.distinct("destination_city")
     hotel_cities = await db.hotels.distinct("city")
     restaurant_cities = await db.restaurants.distinct("city")
+    attraction_cities = await db.attractions.distinct("city")
     
-    all_cities = set(flight_origins + flight_destinations + hotel_cities + restaurant_cities)
+    all_cities = set(flight_origins + flight_destinations + hotel_cities + restaurant_cities + attraction_cities)
     return {"cities": sorted(list(all_cities))}
 
 
@@ -968,7 +1397,11 @@ async def ensure_flight_departure_dates():
 async def startup_event():
     await load_csv_flights()
     await seed_hotels_restaurants()
+<<<<<<< HEAD
     await ensure_flight_departure_dates()
+=======
+    await load_csv_attractions()
+>>>>>>> 97c3a57434d65a1e9e9fa6a84276966fc7406e96
     logger.info("Application started")
 
 @app.on_event("shutdown")
