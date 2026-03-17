@@ -15,6 +15,7 @@ import jwt
 from jwt import PyJWTError
 import csv
 import random
+import requests
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -76,6 +77,7 @@ class Flight(BaseModel):
     destination_city: str
     departure_time: str
     arrival_time: str
+    departure_date: str
     duration: float
     stops: str
     class_type: str
@@ -241,6 +243,41 @@ class TravelBuddyCreate(BaseModel):
     travel_dates: str
     message: str
 
+class Review(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_email: str
+    item_id: str
+    item_type: str  # flight, hotel, restaurant
+    rating: int = Field(ge=1, le=5)
+    comment: str
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+class ReviewCreate(BaseModel):
+    item_id: str
+    item_type: str
+    rating: int = Field(ge=1, le=5)
+    comment: str
+
+# Wallet models
+class Wallet(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_email: str
+    balance: float = 0.0
+    updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+class WalletTransaction(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    wallet_id: str
+    amount: float
+    type: str  # credit or debit
+    timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+class WalletAdd(BaseModel):
+    amount: float
+
 # ==================== AUTH HELPERS ====================
 
 def hash_password(password: str) -> str:
@@ -268,37 +305,75 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     except PyJWTError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
+
+async def get_current_user_optional(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)):
+    if not credentials:
+        return None
+    try:
+        token = credentials.credentials
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload.get("sub")
+    except Exception:
+        return None
+
 # ==================== SEED DATA ====================
 
 async def load_csv_flights():
+    # Use airline homepages as the default booking redirect (better than random aggregator login pages)
+    airline_booking_urls = {
+        "SPICEJET": "https://www.spicejet.com/",
+        "AIRASIA": "https://www.airasia.com/",
+        "VISTARA": "https://www.airvistara.com/",
+        "GO_FIRST": "https://www.flygofirst.com/",
+        "INDIGO": "https://www.goindigo.in/",
+        "AIR_INDIA": "https://www.airindia.in/",
+    }
+
+    async def get_booking_info(airline: str):
+        key = airline.strip().upper().replace(" ", "_")
+        url = airline_booking_urls.get(key)
+        if url:
+            return airline.replace('_', ' '), url
+        # fall back to a random aggregator if airline is unknown
+        aggregators = [
+            {"name": "MakeMyTrip", "url": "https://www.makemytrip.com/flights"},
+            {"name": "Cleartrip", "url": "https://www.cleartrip.com/flights"},
+            {"name": "Goibibo", "url": "https://www.goibibo.com/flights"},
+            {"name": "Expedia", "url": "https://www.expedia.co.in/Flights"},
+            {"name": "Yatra", "url": "https://www.yatra.com/flights"},
+        ]
+        choice = random.choice(aggregators)
+        return choice["name"], choice["url"]
+
+    # If flights already exist, update their redirect URLs to match the airline mapping.
     existing = await db.flights.count_documents({})
     if existing > 0:
         logger.info(f"Flights already loaded: {existing} documents")
+        cursor = db.flights.find({}, {"_id": 1, "airline": 1})
+        async for doc in cursor:
+            platform_name, deal_url = await get_booking_info(doc.get("airline", ""))
+            await db.flights.update_one(
+                {"_id": doc["_id"]},
+                {"$set": {"platform": platform_name, "deal_url": deal_url}}
+            )
         return
-    
+
     csv_path = ROOT_DIR / 'flights.csv'
     if not csv_path.exists():
         logger.warning("flights.csv not found")
         return
-    
+
     logger.info("Loading flights from CSV...")
     batch = []
     batch_size = 1000
-    
-    # Booking platforms for redirection
-    platforms = [
-        {"name": "MakeMyTrip", "url": "https://www.makemytrip.com/flights"},
-        {"name": "Cleartrip", "url": "https://www.cleartrip.com/flights"},
-        {"name": "Goibibo", "url": "https://www.goibibo.com/flights"},
-        {"name": "Expedia", "url": "https://www.expedia.co.in/Flights"},
-        {"name": "Yatra", "url": "https://www.yatra.com/flights"},
-    ]
-    
+
     with open(csv_path, 'r', encoding='utf-8') as f:
         reader = csv.DictReader(f)
         count = 0
         for row in reader:
-            platform = random.choice(platforms)
+            platform_name, deal_url = await get_booking_info(row['airline'])
+            departure_days = int(row['days_left'])
+            departure_date = (datetime.now(timezone.utc) + timedelta(days=departure_days)).date().isoformat()
             doc = {
                 "id": str(uuid.uuid4()),
                 "airline": row['airline'].replace('_', ' '),
@@ -307,32 +382,124 @@ async def load_csv_flights():
                 "destination_city": row['destination_city'],
                 "departure_time": row['departure_time'].replace('_', ' '),
                 "arrival_time": row['arrival_time'].replace('_', ' '),
+                "departure_date": departure_date,
                 "duration": float(row['duration']),
                 "stops": row['stops'],
                 "class_type": row['class'],
                 "days_left": int(row['days_left']),
                 "price": float(row['price']),
-                "platform": platform["name"],
-                "deal_url": platform["url"]
+                "platform": platform_name,
+                "deal_url": deal_url,
             }
             batch.append(doc)
             count += 1
-            
+
             if len(batch) >= batch_size:
                 await db.flights.insert_many(batch)
                 batch = []
                 logger.info(f"Loaded {count} flights...")
-        
+
         if batch:
             await db.flights.insert_many(batch)
-    
+
     logger.info(f"CSV loading complete: {count} flights loaded")
+
+async def load_csv_restaurants():
+    """Load restaurants from CSV into the database.
+
+    Expects a file named 'indian_restaurants.csv' in the backend directory.
+
+    If the database already has some restaurants but fewer than a threshold,
+    we clear and reload to ensure the full dataset is available.
+    """
+    existing_restaurants = await db.restaurants.count_documents({})
+
+    # If we already have a large dataset, skip reloading.
+    if existing_restaurants >= 1000:
+        logger.info(f"Restaurants already loaded: {existing_restaurants} documents")
+        return
+
+    if existing_restaurants > 0:
+        logger.info(f"Restaurants collection is small ({existing_restaurants} docs), reloading from CSV")
+        await db.restaurants.delete_many({})
+
+    csv_path = ROOT_DIR / 'indian_restaurants.csv'
+    if not csv_path.exists():
+        logger.warning("indian_restaurants.csv not found, skipping restaurant seed")
+        return
+
+    logger.info("Loading restaurants from CSV...")
+    batch = []
+    batch_size = 1000
+    count = 0
+
+    def truthy(val):
+        if val is None:
+            return False
+        return str(val).strip().lower() in ("1", "true", "yes", "y")
+
+    def pick_cuisine(row):
+        if truthy(row.get("south_indian_or_not")):
+            return "South Indian"
+        if truthy(row.get("north_indian_or_not")):
+            return "North Indian"
+        if truthy(row.get("biryani_or_not")):
+            return "Biryani"
+        if truthy(row.get("fast_food_or_not")):
+            return "Fast Food"
+        if truthy(row.get("street_food")):
+            return "Street Food"
+        if truthy(row.get("bakery_or_not")):
+            return "Bakery"
+        return "Indian"
+
+    with open(csv_path, 'r', encoding='utf-8-sig', newline='') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            try:
+                rating = float(row.get("rating", 0) or 0)
+            except ValueError:
+                rating = 0.0
+
+            try:
+                avg_price = float(row.get("average_price", 0) or 0)
+            except ValueError:
+                avg_price = 0.0
+
+            restaurant = {
+                "id": str(uuid.uuid4()),
+                "name": row.get("restaurant_name", "").strip(),
+                "location": row.get("location", "").strip(),
+                "city": row.get("location", "").strip(),
+                "cuisine": pick_cuisine(row),
+                "avg_price": avg_price,
+                "rating": rating,
+                "platform": "Zomato",
+                "deal_url": "https://www.zomato.com",
+                "image_url": "",
+                "description": f"Average delivery time: {row.get('average _delivery_time', '').strip()} mins",
+            }
+            batch.append(restaurant)
+            count += 1
+
+            if len(batch) >= batch_size:
+                await db.restaurants.insert_many(batch)
+                batch = []
+                logger.info(f"Loaded {count} restaurants...")
+
+        if batch:
+            await db.restaurants.insert_many(batch)
+
+    logger.info(f"CSV loading complete: {count} restaurants loaded")
+
 
 async def seed_hotels_restaurants():
     existing_hotels = await db.hotels.count_documents({})
     if existing_hotels > 0:
+        # Still attempt to load restaurants if they are missing
+        await load_csv_restaurants()
         return
-    
+
     hotels_data = [
         {
             "id": str(uuid.uuid4()),
@@ -347,6 +514,7 @@ async def seed_hotels_restaurants():
             "image_url": "https://images.unsplash.com/photo-1566073771259-6a8506099945?w=800",
             "description": "Iconic luxury hotel with stunning sea views"
         },
+
         {
             "id": str(uuid.uuid4()),
             "name": "The Oberoi",
@@ -497,6 +665,9 @@ async def seed_hotels_restaurants():
     ]
     await db.restaurants.insert_many(restaurants_data)
     
+    # Load any additional restaurants from CSV, if available
+    await load_csv_restaurants()
+
     logger.info("Hotels and restaurants seeded")
 
 async def load_csv_attractions():
@@ -809,17 +980,179 @@ async def create_travel_buddy(buddy: TravelBuddyCreate, current_user: str = Depe
 @api_router.get("/travel-buddies", response_model=List[TravelBuddy])
 async def get_travel_buddies(
     destination: Optional[str] = Query(None),
-    current_user: str = Depends(get_current_user)
+    current_user: Optional[str] = Depends(get_current_user_optional)
 ):
     query = {}
     if destination:
         query["destination"] = {"$regex": destination, "$options": "i"}
-    
-    # Exclude current user's own posts
-    query["user_email"] = {"$ne": current_user}
-    
+
+    # Exclude current user's own posts when authenticated
+    if current_user:
+        query["user_email"] = {"$ne": current_user}
+
     buddies = await db.travel_buddies.find(query, {"_id": 0}).to_list(1000)
     return buddies
+# ==================== WALLET ROUTES ====================
+
+@api_router.get("/wallet")
+async def get_wallet(current_user: str = Depends(get_current_user)):
+    wallet = await db.wallets.find_one({"user_email": current_user}, {"_id": 0})
+    if not wallet:
+        wallet = Wallet(user_email=current_user).model_dump()
+        await db.wallets.insert_one(wallet)
+    return wallet
+
+@api_router.post("/wallet/add")
+async def add_funds(payload: WalletAdd, current_user: str = Depends(get_current_user)):
+    wallet = await db.wallets.find_one({"user_email": current_user}, {"_id": 0})
+    if not wallet:
+        wallet = Wallet(user_email=current_user).model_dump()
+        await db.wallets.insert_one(wallet)
+
+    new_balance = wallet.get("balance", 0.0) + payload.amount
+    await db.wallets.update_one(
+        {"user_email": current_user},
+        {"$set": {"balance": new_balance, "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+
+    # Create a transaction record but don't fail the request if this part fails.
+    try:
+        wallet_id = wallet.get("id") or str(uuid.uuid4())
+        txn = WalletTransaction(wallet_id=wallet_id, amount=payload.amount, type="credit").model_dump()
+        await db.wallet_transactions.insert_one(txn)
+    except Exception as e:
+        logger.error("Failed to create wallet transaction: %s", e)
+
+    # Return a JSON-serializable wallet (exclude internal Mongo _id)
+    wallet = await db.wallets.find_one({"user_email": current_user}, {"_id": 0})
+    return wallet
+
+# ==================== WEATHER ROUTE ====================
+
+# simple mapping for commonly used cities
+_city_coords = {
+    "DELHI": {"lat": 28.7041, "lon": 77.1025},
+    "MUMBAI": {"lat": 19.0760, "lon": 72.8777},
+    "BENGALURU": {"lat": 12.9716, "lon": 77.5946},
+    "BANGALORE": {"lat": 12.9716, "lon": 77.5946},
+    "CHENNAI": {"lat": 13.0827, "lon": 80.2707},
+    "HYDERABAD": {"lat": 17.3850, "lon": 78.4867},
+    "KOLKATA": {"lat": 22.5726, "lon": 88.3639},
+    "GOA": {"lat": 15.2993, "lon": 74.1240},
+    "JAIPUR": {"lat": 26.9124, "lon": 75.7873},
+    "PUNE": {"lat": 18.5204, "lon": 73.8567},
+}
+
+# simple list of attractions per city for sample tours
+_city_attractions = {
+    "DELHI": [
+        {"name": "Red Fort + Old Delhi Walk", "description": "Explore historic monuments and street food in Old Delhi."},
+        {"name": "Qutub Minar & Garden Tour", "description": "Visit iconic monuments and enjoy a peaceful garden walk."},
+        {"name": "Evening Light Show at India Gate", "description": "See the national monument lit up at night with a guided narration."},
+    ],
+    "MUMBAI": [
+        {"name": "Gateway of India & Marine Drive", "description": "Coastal walk from the Gateway to Queen's Necklace."},
+        {"name": "Street Food Tour in Colaba", "description": "Sample vada pav, bhel puri, and pav bhaji from local stalls."},
+        {"name": "Elephanta Caves Ferry", "description": "Take a ferry to the UNESCO-listed caves and return by sunset."},
+    ],
+    "BANGALORE": [
+        {"name": "Lalbagh Botanical Garden", "description": "Morning stroll among rare trees and glasshouse flowers."},
+        {"name": "Bangalore Palace Tour", "description": "Visit the royal palace and learn about its history."},
+        {"name": "Food Walk in Indiranagar", "description": "Try popular cafes and street bites in the buzzing neighborhood."},
+    ],
+    "GOA": [
+        {"name": "North Goa Beach Hopping", "description": "Explore Calangute, Baga, and Anjuna with sunset views."},
+        {"name": "Cultural Old Goa Tour", "description": "Visit basilicas, museums, and colonial architecture."},
+        {"name": "Goa Spice Plantation Visit", "description": "Learn about spices, enjoy a farm lunch, and do a short nature walk."},
+    ],
+}
+
+
+@api_router.get("/weather")
+async def get_weather(city: str = Query(...)):
+    coords = _city_coords.get(city.strip().upper())
+    if not coords:
+        raise HTTPException(status_code=404, detail="City not supported")
+    url = (
+        f"https://api.open-meteo.com/v1/forecast?latitude={coords['lat']}"
+        f"&longitude={coords['lon']}&daily=temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=auto"
+    )
+    try:
+        resp = requests.get(url, timeout=5)
+        resp.raise_for_status()
+    except Exception:
+        raise HTTPException(status_code=502, detail="Weather service error")
+    data = resp.json()
+    forecast = []
+    daily = data.get("daily", {})
+    dates = daily.get("time", [])
+    maxs = daily.get("temperature_2m_max", [])
+    mins = daily.get("temperature_2m_min", [])
+    prec = daily.get("precipitation_sum", [])
+    for i, d in enumerate(dates):
+        forecast.append({
+            "date": d,
+            "temp_max": maxs[i] if i < len(maxs) else None,
+            "temp_min": mins[i] if i < len(mins) else None,
+            "precip": prec[i] if i < len(prec) else None,
+        })
+    return {"city": city, "forecast": forecast}
+
+
+# ==================== ATTRACTIONS / TOURS ROUTE ====================
+
+class Attraction(BaseModel):
+    name: str
+    description: str
+
+@api_router.get("/attractions")
+async def get_attractions(city: str = Query(...), date: Optional[str] = Query(None)):
+    key = city.strip().upper()
+    if key not in _city_attractions:
+        raise HTTPException(status_code=404, detail="No attractions found for this city")
+
+    # Basic logic: rotate activities based on date to show some variation
+    activities = _city_attractions[key]
+    if date:
+        # pick a starting index based on date hash to add variability
+        idx = sum(ord(c) for c in date) % len(activities)
+        rotated = activities[idx:] + activities[:idx]
+    else:
+        rotated = activities
+
+    return {"city": city, "date": date, "attractions": rotated}
+# ==================== REVIEWS ROUTES ====================
+
+@api_router.post("/reviews", response_model=Review)
+async def create_review(review: ReviewCreate, current_user: str = Depends(get_current_user)):
+    user = await db.users.find_one({"email": current_user})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    review_obj = Review(
+        user_email=current_user,
+        item_id=review.item_id,
+        item_type=review.item_type,
+        rating=review.rating,
+        comment=review.comment,
+    )
+    await db.reviews.insert_one(review_obj.model_dump())
+    return review_obj
+
+@api_router.get("/reviews")
+async def get_reviews(
+    item_id: Optional[str] = Query(None),
+    item_type: Optional[str] = Query(None),
+    limit: int = Query(20, le=100)
+):
+    query = {}
+    if item_id:
+        query["item_id"] = item_id
+    if item_type:
+        query["item_type"] = item_type
+
+    reviews = await db.reviews.find(query, {"_id": 0}).sort("created_at", -1).to_list(limit)
+    return reviews
 
 # ==================== FLIGHTS ROUTES ====================
 from services import flight_service
@@ -830,6 +1163,8 @@ async def get_flights(
     destination: Optional[str] = Query(None),
     max_price: Optional[float] = Query(None),
     stops: Optional[str] = Query(None),
+    departure_date: Optional[str] = Query(None),
+    return_date: Optional[str] = Query(None),
     limit: int = Query(50, le=200)
 ):
     # try external provider first
@@ -853,6 +1188,8 @@ async def get_flights(
         query["price"] = {"$lte": max_price}
     if stops:
         query["stops"] = stops
+    if departure_date:
+        query["departure_date"] = departure_date
     
     flights = await db.flights.find(query, {"_id": 0}).sort("price", 1).to_list(limit)
     return flights
@@ -1014,6 +1351,14 @@ async def get_cities():
     all_cities = set(flight_origins + flight_destinations + hotel_cities + restaurant_cities + attraction_cities)
     return {"cities": sorted(list(all_cities))}
 
+
+@api_router.get("/recommendations")
+async def get_recommendations():
+    """Return a small set of recommended deals for the home page."""
+    cheapest_flights = await db.flights.find({}, {"_id": 0}).sort("price", 1).limit(5).to_list(5)
+    cheapest_hotels = await db.hotels.find({}, {"_id": 0}).sort("price_per_night", 1).limit(5).to_list(5)
+    return {"cheapest_flights": cheapest_flights, "cheapest_hotels": cheapest_hotels}
+
 @api_router.get("/")
 async def root():
     return {"message": "Budget Voyage API"}
@@ -1036,11 +1381,27 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+async def ensure_flight_departure_dates():
+    """Ensure existing flights have a departure_date field for better redirects."""
+    cursor = db.flights.find({"departure_date": {"$exists": False}})
+    async for doc in cursor:
+        days_left = doc.get("days_left", 0) or 0
+        try:
+            days_left = int(days_left)
+        except Exception:
+            days_left = 0
+        departure_date = (datetime.now(timezone.utc) + timedelta(days=days_left)).date().isoformat()
+        await db.flights.update_one({"_id": doc["_id"]}, {"$set": {"departure_date": departure_date}})
+
 @app.on_event("startup")
 async def startup_event():
     await load_csv_flights()
     await seed_hotels_restaurants()
+<<<<<<< HEAD
+    await ensure_flight_departure_dates()
+=======
     await load_csv_attractions()
+>>>>>>> 97c3a57434d65a1e9e9fa6a84276966fc7406e96
     logger.info("Application started")
 
 @app.on_event("shutdown")

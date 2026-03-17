@@ -19,6 +19,27 @@ node_modules/
 # Testing
 /coverage
 
+<<<<<<< HEAD
+# Cache files
+frontend/node_modules/.cache/
+backend/__pycache__/
+tests/__pycache__/
+.venv/
+emergent/
+
+# Cache files
+frontend/node_modules/.cache/
+backend/__pycache__/
+*.pyc
+__pycache__/
+
+# Environment files
+.env
+frontend/.env
+backend/.env
+
+=======
+>>>>>>> 97c3a57434d65a1e9e9fa6a84276966fc7406e96
 # Next.js
 /.next/
 /out/
@@ -78,6 +99,11 @@ agenthub/agents/youtube/db
 
 # Build caches
 .cache/
+<<<<<<< HEAD
+
+# Mobile development
+android-sdk/ 
+=======
 /frontend/node_modules/.cache/
 /frontend/node_modules/.cache/**
 
@@ -86,3 +112,4 @@ android-sdk/
 
 frontend/node_modules/
 frontend/node_modules/.cache/
+>>>>>>> 97c3a57434d65a1e9e9fa6a84276966fc7406e96
