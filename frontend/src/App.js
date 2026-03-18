@@ -1,9 +1,5 @@
-<<<<<<< HEAD
 import { useState, useEffect, useRef } from "react";
-=======
-import { useState, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
->>>>>>> 97c3a57434d65a1e9e9fa6a84276966fc7406e96
 import "@/App.css";
 import axios from "axios";
 import { Button } from "@/components/ui/button";
@@ -13,11 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-<<<<<<< HEAD
-import { Plane, Hotel, UtensilsCrossed, Search, ArrowRight, Star, Clock, MapPin, User, LogOut, Heart, Calendar, MessageCircle, Users, Wallet as WalletIcon, Cloud, Sun, Moon } from "lucide-react";
-=======
-import { Plane, Hotel, UtensilsCrossed, Train, Search, ArrowRight, Star, Clock, MapPin, User, LogOut, Heart, Calendar, MessageCircle, Users, Landmark, Compass } from "lucide-react";
->>>>>>> 97c3a57434d65a1e9e9fa6a84276966fc7406e96
+import { Plane, Hotel, UtensilsCrossed, Train, Search, ArrowRight, Star, Clock, MapPin, User, LogOut, Heart, Calendar, MessageCircle, Users, Wallet as WalletIcon, Cloud, Sun, Moon, Landmark, Compass } from "lucide-react";
 import { toast } from "sonner";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -47,11 +39,8 @@ function App() {
   const [attractions, setAttractions] = useState([]);
   const [tripPlan, setTripPlan] = useState(null);
   const [cities, setCities] = useState([]);
-<<<<<<< HEAD
   const [recommendations, setRecommendations] = useState({ cheapest_flights: [], cheapest_hotels: [] });
-=======
   const [trains, setTrains] = useState([]);
->>>>>>> 97c3a57434d65a1e9e9fa6a84276966fc7406e96
   const [loading, setLoading] = useState(false);
   
   // Profile
@@ -95,11 +84,6 @@ function App() {
   const [weatherCity, setWeatherCity] = useState("");
   const [weatherForecast, setWeatherForecast] = useState([]);
 
-  // Attractions / Tours
-  const [tourCity, setTourCity] = useState("");
-  const [tourDate, setTourDate] = useState("");
-  const [tourAttractions, setTourAttractions] = useState([]);
-
   // Flight filters
   const [flightSource, setFlightSource] = useState("");
   const [flightDestination, setFlightDestination] = useState("");
@@ -116,10 +100,7 @@ function App() {
   // Restaurant filters
   const [restaurantCity, setRestaurantCity] = useState("");
   const [restaurantCuisine, setRestaurantCuisine] = useState("");
-<<<<<<< HEAD
   const restaurantMaxPriceRef = useRef(null);
-=======
-  const [restaurantMaxPrice, setRestaurantMaxPrice] = useState("");
   const [attractionCity, setAttractionCity] = useState("");
   const [attractionMaxFee, setAttractionMaxFee] = useState("");
   const [attractionMinRating, setAttractionMinRating] = useState("");
@@ -145,7 +126,6 @@ function App() {
   const [stationsFrom, setStationsFrom] = useState([]);
   const [stationsTo, setStationsTo] = useState([]);
   const [useCitySearch, setUseCitySearch] = useState(true);
->>>>>>> 97c3a57434d65a1e9e9fa6a84276966fc7406e96
 
   useEffect(() => {
     if (token) {
@@ -170,12 +150,6 @@ function App() {
     document.documentElement.classList.toggle("dark", theme === "dark");
     localStorage.setItem("theme", theme);
   }, [theme]);
-
-  useEffect(() => {
-    if (activeTab === "attractions" && !tourCity && cities.length) {
-      setTourCity(cities[0]);
-    }
-  }, [activeTab, cities, tourCity]);
 
   useEffect(() => {
     if (isProfilePage && token) {
@@ -416,24 +390,6 @@ function App() {
     }
   };
 
-  const fetchAttractions = async (city, date) => {
-    if (!city) {
-      toast.error("Please select a city for tours");
-      return;
-    }
-
-    try {
-      const response = await axios.get(`${API}/attractions`, {
-        params: { city, date },
-      });
-      setTourAttractions(response.data.attractions || []);
-    } catch (error) {
-      console.error("Error fetching attractions:", error);
-      const message = error.response?.data?.detail || "Could not load attractions";
-      toast.error(message);
-    }
-  };
-
   const openWeather = (city) => {
     const selectedCity = city || (cities.length ? cities[0] : "Mumbai");
     if (!selectedCity) {
@@ -577,116 +533,6 @@ function App() {
     }
   };
 
-<<<<<<< HEAD
-  const getRedirectUrl = (type, item, date, returnDate) => {
-    // For flights we use Google Flights search with the source/destination prefilled
-    const getAirportCode = (city) => {
-      if (!city) return "";
-      const normalized = city.trim().toUpperCase();
-      const mapping = {
-        DELHI: "DEL",
-        MUMBAI: "BOM",
-        BENGALURU: "BLR",
-        BANGALORE: "BLR",
-        CHENNAI: "MAA",
-        HYDERABAD: "HYD",
-        KOLKATA: "CCU",
-        GOA: "GOI",
-        JAIPUR: "JAI",
-        PUNE: "PNQ",
-        AHMEDABAD: "AMD",
-        COIMBATORE: "CJB",
-        TRIVANDRUM: "TRV",
-        VADODARA: "BDQ",
-        LUCKNOW: "LKO",
-      };
-      return mapping[normalized] || normalized.slice(0, 3);
-    };
-
-    const dateParam = date ? date : item.departure_date;
-    const returnParam = returnDate ? returnDate : item.return_date;
-
-    if (type === "flight") {
-      const srcCode = getAirportCode(item.source_city);
-      const dstCode = getAirportCode(item.destination_city);
-      const departure = dateParam || "";
-      const ret = returnParam || "";
-
-      // Airline-specific booking URLs (common ones) so users go to the search page, not homepage.
-      const airlineKey = (item.airline || "").toString().trim().toUpperCase().replace(/\s+/g, "_");
-      const airlineUrls = {
-        INDIGO: (s, d, dep, ret) =>
-          `https://www.goindigo.in/?origin=${s}&destination=${d}&departDate=${dep}${ret ? `&returnDate=${ret}` : ""}`,
-        SPICEJET: (s, d, dep, ret) =>
-          `https://book.spicejet.com/?origin=${s}&destination=${d}&tripType=O&departureDate=${dep}${ret ? `&returnDate=${ret}` : ""}`,
-        VISTARA: (s, d, dep, ret) =>
-          `https://www.airvistara.com/in/en/book-flight?departureStation=${s}&arrivalStation=${d}&departureDate=${dep}${ret ? `&returnDate=${ret}` : ""}`,
-        GO_FIRST: (s, d, dep, ret) =>
-          `https://book.gofirst.com/flights?from=${s}&to=${d}&depart=${dep}${ret ? `&return=${ret}` : ""}`,
-        AIR_ASIA: (s, d, dep, ret) =>
-          `https://www.airasia.com/en/gb?origin=${s}&destination=${d}&departureDate=${dep}${ret ? `&returnDate=${ret}` : ""}`,
-        AIR_INDIA: (s, d, dep, ret) =>
-          `https://www.airindia.in/booking/flight-search.htm?origin=${s}&destination=${d}&departureDate=${dep}${ret ? `&returnDate=${ret}` : ""}`,
-      };
-
-      if (airlineUrls[airlineKey]) {
-        return airlineUrls[airlineKey](srcCode, dstCode, departure, ret);
-      }
-
-      // Use the platform/deal_url if it exists and is a valid URL
-      if (item.deal_url) {
-        try {
-          const url = new URL(item.deal_url);
-          url.searchParams.set("origin", srcCode);
-          url.searchParams.set("destination", dstCode);
-          if (departure) url.searchParams.set("departDate", departure);
-          if (ret) url.searchParams.set("returnDate", ret);
-          return url.toString();
-        } catch (e) {
-          // if item.deal_url is not a valid URL, fall back to Google Flights
-        }
-      }
-
-      // Fallback to Google Flights
-      const retPart = ret ? `*${dstCode}.${srcCode}.${ret}` : "";
-      return `https://www.google.com/flights?hl=en#flt=${srcCode}.${dstCode}.${departure}${retPart}`;
-    }
-
-    // For hotels we direct to a search / booking page on the corresponding platform
-    if (type === "hotel") {
-      const city = encodeURIComponent(item.city || item.location || "");
-      const hotelName = encodeURIComponent(item.name || "");
-
-      if (item.platform?.toLowerCase().includes("booking")) {
-        return `https://www.booking.com/searchresults.html?ss=${city}`;
-      }
-      if (item.platform?.toLowerCase().includes("makemytrip")) {
-        return `https://www.makemytrip.com/hotels/?city=${city}`;
-      }
-      if (item.platform?.toLowerCase().includes("agoda")) {
-        return `https://www.agoda.com/search?city=${city}`;
-      }
-      if (item.platform?.toLowerCase().includes("expedia")) {
-        return `https://www.expedia.co.in/Hotel-Search?destination=${city}`;
-      }
-
-      // Fallback: Google Hotels search
-      return `https://www.google.com/travel/hotels?q=${city}`;
-    }
-
-    // For restaurants we direct to Google Maps with the cuisine/city
-    if (type === "restaurant") {
-      const city = encodeURIComponent(item.city || item.location || "");
-      const cuisine = encodeURIComponent(item.cuisine || "");
-      const query = `${cuisine}${cuisine && city ? " in " : ""}${city}`.trim();
-      return `https://www.google.com/maps/search/${query}`;
-    }
-
-    return item.deal_url;
-  };
-
-  const handleBooking = async (type, item, date, returnDate) => {
-=======
   const searchAttractions = async () => {
     setLoading(true);
     try {
@@ -696,8 +542,11 @@ function App() {
       if (attractionMinRating) params.min_rating = attractionMinRating;
 
       const response = await axios.get(`${API}/attractions`, { params });
-      setAttractions(response.data);
-      toast.success(`Found ${response.data.length} attractions`);
+      const attractionsData = Array.isArray(response.data)
+        ? response.data
+        : response.data?.attractions || [];
+      setAttractions(attractionsData);
+      toast.success(`Found ${attractionsData.length} attractions`);
     } catch (error) {
       console.error("Error fetching attractions:", error);
       toast.error("Failed to fetch attractions");
@@ -830,8 +679,114 @@ function App() {
     }
   };
 
-  const handleBooking = async (type, item) => {
->>>>>>> 97c3a57434d65a1e9e9fa6a84276966fc7406e96
+  const getRedirectUrl = (type, item, date, returnDate) => {
+    // For flights we use Google Flights search with the source/destination prefilled
+    const getAirportCode = (city) => {
+      if (!city) return "";
+      const normalized = city.trim().toUpperCase();
+      const mapping = {
+        DELHI: "DEL",
+        MUMBAI: "BOM",
+        BENGALURU: "BLR",
+        BANGALORE: "BLR",
+        CHENNAI: "MAA",
+        HYDERABAD: "HYD",
+        KOLKATA: "CCU",
+        GOA: "GOI",
+        JAIPUR: "JAI",
+        PUNE: "PNQ",
+        AHMEDABAD: "AMD",
+        COIMBATORE: "CJB",
+        TRIVANDRUM: "TRV",
+        VADODARA: "BDQ",
+        LUCKNOW: "LKO",
+      };
+      return mapping[normalized] || normalized.slice(0, 3);
+    };
+
+    const dateParam = date ? date : item.departure_date;
+    const returnParam = returnDate ? returnDate : item.return_date;
+
+    if (type === "flight") {
+      const srcCode = getAirportCode(item.source_city);
+      const dstCode = getAirportCode(item.destination_city);
+      const departure = dateParam || "";
+      const ret = returnParam || "";
+
+      // Airline-specific booking URLs (common ones) so users go to the search page, not homepage.
+      const airlineKey = (item.airline || "").toString().trim().toUpperCase().replace(/\s+/g, "_");
+      const airlineUrls = {
+        INDIGO: (s, d, dep, ret) =>
+          `https://www.goindigo.in/?origin=${s}&destination=${d}&departDate=${dep}${ret ? `&returnDate=${ret}` : ""}`,
+        SPICEJET: (s, d, dep, ret) =>
+          `https://book.spicejet.com/?origin=${s}&destination=${d}&tripType=O&departureDate=${dep}${ret ? `&returnDate=${ret}` : ""}`,
+        VISTARA: (s, d, dep, ret) =>
+          `https://www.airvistara.com/in/en/book-flight?departureStation=${s}&arrivalStation=${d}&departureDate=${dep}${ret ? `&returnDate=${ret}` : ""}`,
+        GO_FIRST: (s, d, dep, ret) =>
+          `https://book.gofirst.com/flights?from=${s}&to=${d}&depart=${dep}${ret ? `&return=${ret}` : ""}`,
+        AIR_ASIA: (s, d, dep, ret) =>
+          `https://www.airasia.com/en/gb?origin=${s}&destination=${d}&departureDate=${dep}${ret ? `&returnDate=${ret}` : ""}`,
+        AIR_INDIA: (s, d, dep, ret) =>
+          `https://www.airindia.in/booking/flight-search.htm?origin=${s}&destination=${d}&departureDate=${dep}${ret ? `&returnDate=${ret}` : ""}`,
+      };
+
+      if (airlineUrls[airlineKey]) {
+        return airlineUrls[airlineKey](srcCode, dstCode, departure, ret);
+      }
+
+      // Use the platform/deal_url if it exists and is a valid URL
+      if (item.deal_url) {
+        try {
+          const url = new URL(item.deal_url);
+          url.searchParams.set("origin", srcCode);
+          url.searchParams.set("destination", dstCode);
+          if (departure) url.searchParams.set("departDate", departure);
+          if (ret) url.searchParams.set("returnDate", ret);
+          return url.toString();
+        } catch (e) {
+          // if item.deal_url is not a valid URL, fall back to Google Flights
+        }
+      }
+
+      // Fallback to Google Flights
+      const retPart = ret ? `*${dstCode}.${srcCode}.${ret}` : "";
+      return `https://www.google.com/flights?hl=en#flt=${srcCode}.${dstCode}.${departure}${retPart}`;
+    }
+
+    // For hotels we direct to a search / booking page on the corresponding platform
+    if (type === "hotel") {
+      const city = encodeURIComponent(item.city || item.location || "");
+      const hotelName = encodeURIComponent(item.name || "");
+
+      if (item.platform?.toLowerCase().includes("booking")) {
+        return `https://www.booking.com/searchresults.html?ss=${city}`;
+      }
+      if (item.platform?.toLowerCase().includes("makemytrip")) {
+        return `https://www.makemytrip.com/hotels/?city=${city}`;
+      }
+      if (item.platform?.toLowerCase().includes("agoda")) {
+        return `https://www.agoda.com/search?city=${city}`;
+      }
+      if (item.platform?.toLowerCase().includes("expedia")) {
+        return `https://www.expedia.co.in/Hotel-Search?destination=${city}`;
+      }
+
+      // Fallback: Google Hotels search
+      return `https://www.google.com/travel/hotels?q=${city}`;
+    }
+
+    // For restaurants we direct to Google Maps with the cuisine/city
+    if (type === "restaurant") {
+      const city = encodeURIComponent(item.city || item.location || "");
+      const cuisine = encodeURIComponent(item.cuisine || "");
+      const query = `${cuisine}${cuisine && city ? " in " : ""}${city}`.trim();
+      return `https://www.google.com/maps/search/${query}`;
+    }
+
+    return item.deal_url;
+  };
+
+  const handleBooking = async (type, item, date, returnDate) => {
     if (!isAuthenticated) {
       toast.error("Please login to save bookings");
       setShowAuth(true);
@@ -1066,23 +1021,19 @@ function App() {
                   <UtensilsCrossed className="tab-icon" />
                   Restaurants
                 </TabsTrigger>
-            <TabsTrigger value="attractions" className="tab-trigger" data-testid="tab-attractions">
-              <Landmark className="tab-icon" />
-              Attractions
-            </TabsTrigger>
-            <TabsTrigger value="trip" className="tab-trigger" data-testid="tab-trip">
-              <Compass className="tab-icon" />
-              Trip Planner
-            </TabsTrigger>
-            <TabsTrigger value="weather" className="tab-trigger" data-testid="tab-weather">
-              <Cloud className="tab-icon" />
-              Weather
-            </TabsTrigger>
-            <TabsTrigger value="attractions" className="tab-trigger" data-testid="tab-attractions">
-              <MapPin className="tab-icon" />
-              Tours
-            </TabsTrigger>
-          </TabsList>
+                <TabsTrigger value="attractions" className="tab-trigger" data-testid="tab-attractions">
+                  <Landmark className="tab-icon" />
+                  Attractions
+                </TabsTrigger>
+                <TabsTrigger value="trip" className="tab-trigger" data-testid="tab-trip">
+                  <Compass className="tab-icon" />
+                  Trip Planner
+                </TabsTrigger>
+                <TabsTrigger value="weather" className="tab-trigger" data-testid="tab-weather">
+                  <Cloud className="tab-icon" />
+                  Weather
+                </TabsTrigger>
+              </TabsList>
 
           {/* Flights Tab */}
           <TabsContent value="flights" className="tab-content">
@@ -1655,7 +1606,6 @@ function App() {
             </div>
           </TabsContent>
 
-<<<<<<< HEAD
           {/* Weather Tab */}
           <TabsContent value="weather" className="tab-content">
             <Card className="filter-card">
@@ -1722,16 +1672,6 @@ function App() {
             )}
           </TabsContent>
 
-          {/* Attractions / Tours Tab */}
-          <TabsContent value="attractions" className="tab-content">
-            <Card className="filter-card">
-              <CardHeader>
-                <CardTitle className="filter-title">
-                  <MapPin className="filter-icon" />
-                  Tours & Attractions
-                </CardTitle>
-                <CardDescription>See things to do in a city for a selected day.</CardDescription>
-=======
           {/* Attractions Tab */}
           <TabsContent value="attractions" className="tab-content">
             <Card className="filter-card">
@@ -1741,19 +1681,13 @@ function App() {
                   Find Attractions
                 </CardTitle>
                 <CardDescription>Discover popular attractions in your city</CardDescription>
->>>>>>> 97c3a57434d65a1e9e9fa6a84276966fc7406e96
               </CardHeader>
               <CardContent>
                 <div className="filter-grid">
                   <div className="filter-group">
                     <label className="filter-label">City</label>
-<<<<<<< HEAD
-                    <Select value={tourCity} onValueChange={setTourCity}>
-                      <SelectTrigger>
-=======
                     <Select value={attractionCity} onValueChange={setAttractionCity}>
                       <SelectTrigger data-testid="attraction-city-select">
->>>>>>> 97c3a57434d65a1e9e9fa6a84276966fc7406e96
                         <SelectValue placeholder="Select city" />
                       </SelectTrigger>
                       <SelectContent>
@@ -1764,26 +1698,7 @@ function App() {
                     </Select>
                   </div>
                   <div className="filter-group">
-<<<<<<< HEAD
-                    <label className="filter-label">Date</label>
-                    <Input
-                      type="date"
-                      value={tourDate}
-                      onChange={(e) => setTourDate(e.target.value)}
-                      data-testid="tour-date-input"
-                    />
-                  </div>
-                  <div className="filter-group">
-                    <Button
-                      onClick={() => fetchAttractions(tourCity, tourDate)}
-                      className="search-btn"
-                      disabled={loading || !tourCity || !tourDate}
-                      data-testid="tour-search-btn"
-                    >
-                      <Search className="btn-icon" />
-                      Find Tours
-=======
-                    <label className="filter-label">Max Fee (₹)</label>
+                    <label className="filter-label">Max Fee (?)</label>
                     <Input
                       type="number"
                       placeholder="e.g., 200"
@@ -1809,33 +1724,12 @@ function App() {
                     <Button onClick={searchAttractions} className="search-btn" disabled={loading} data-testid="attraction-search-btn">
                       <Search className="btn-icon" />
                       Search Attractions
->>>>>>> 97c3a57434d65a1e9e9fa6a84276966fc7406e96
                     </Button>
                   </div>
                 </div>
               </CardContent>
             </Card>
 
-<<<<<<< HEAD
-            {tourAttractions.length > 0 && (
-              <div className="results-container">
-                <h2 className="results-title">Things to do in {tourCity} on {tourDate}</h2>
-                <div className="results-grid">
-                  {tourAttractions.map((item, idx) => (
-                    <Card key={idx} className="result-card">
-                      <CardContent>
-                        <div className="result-details">
-                          <div className="result-row">
-                            <span className="detail-label">{item.name}</span>
-                          </div>
-                          <div className="result-row">
-                            <span>{item.description}</span>
-                          </div>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
-=======
             <div className="results-container">
               <h2 className="results-title" data-testid="attraction-results-title">
                 Attractions ({attractions.length})
@@ -1859,7 +1753,7 @@ function App() {
                           <Badge variant="outline" className="meta-badge">{attraction.attraction_type}</Badge>
                         </div>
                         <div className="price-platform">
-                          <div className="price">₹{Number(attraction.entrance_fee || 0).toLocaleString()}</div>
+                          <div className="price">Rs. {Number(attraction.entrance_fee || 0).toLocaleString()}</div>
                           <div className="platform">{attraction.best_time}</div>
                         </div>
                       </div>
@@ -2026,17 +1920,12 @@ function App() {
                       Save Trip to Profile <ArrowRight className="btn-icon" />
                     </Button>
                   </CardContent>
->>>>>>> 97c3a57434d65a1e9e9fa6a84276966fc7406e96
                 </div>
               </div>
             )}
           </TabsContent>
-<<<<<<< HEAD
         </Tabs>
       </div>
-=======
-            </Tabs>
-          </div>
         </>
       )}
 
@@ -2157,7 +2046,6 @@ function App() {
           </Card>
         </div>
       )}
->>>>>>> 97c3a57434d65a1e9e9fa6a84276966fc7406e96
 
       {/* Auth Dialog */}
       <Dialog open={showAuth} onOpenChange={setShowAuth}>
