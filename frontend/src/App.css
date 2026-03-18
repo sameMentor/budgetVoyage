@@ -70,14 +70,80 @@ body {
 }
 
 .navbar-logo {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.navbar-logo:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 4px;
+  border-radius: 12px;
+}
+
+.logo-mark {
+  position: relative;
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
+  background: radial-gradient(circle at 20% 20%, rgba(255,255,255,0.55), rgba(255,255,255,0) 45%),
+              linear-gradient(135deg, var(--primary) 0%, var(--primary-2) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  display: grid;
+  place-items: center;
+  box-shadow: 0 12px 28px rgba(8, 145, 178, 0.25);
+  overflow: hidden;
+}
+
+.logo-icon {
+  width: 22px;
+  height: 22px;
+  color: #ffffff;
+  z-index: 1;
+}
+
+.logo-glow {
+  position: absolute;
+  inset: -12px;
+  background: radial-gradient(circle, rgba(8, 145, 178, 0.45), rgba(8, 145, 178, 0));
+  filter: blur(6px);
+  z-index: 0;
+}
+
+.logo-spark {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #fbbf24;
+  top: 10px;
+  right: 10px;
+  box-shadow: 0 0 12px rgba(251, 191, 36, 0.8);
+}
+
+.logo-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.1;
+}
+
+.logo-title {
   font-family: 'Playfair Display', serif;
-  font-size: 1.75rem;
-  font-weight: 800;
+  font-size: 1.4rem;
+  letter-spacing: 0.08em;
   background: linear-gradient(135deg, var(--primary) 0%, var(--primary-2) 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
-  cursor: pointer;
+}
+
+.logo-subtitle {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--muted);
 }
 
 .navbar-actions {
@@ -1000,8 +1066,18 @@ body {
     padding: 1rem;
   }
 
-  .navbar-logo {
-    font-size: 1.4rem;
+  .logo-mark {
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+  }
+
+  .logo-title {
+    font-size: 1.15rem;
+  }
+
+  .logo-subtitle {
+    font-size: 0.65rem;
   }
 
   .navbar-actions {

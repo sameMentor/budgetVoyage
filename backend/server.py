@@ -3,6 +3,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+import asyncio
 import os
 import logging
 from pathlib import Path
@@ -22,7 +23,8 @@ load_dotenv(ROOT_DIR / '.env')
 
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
+mongo_timeout_ms = int(os.environ.get("MONGO_CONNECT_TIMEOUT_MS", "2000"))
+client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=mongo_timeout_ms)
 db = client[os.environ['DB_NAME']]
 
 # JWT Configuration
@@ -722,6 +724,39 @@ async def load_csv_attractions():
 
     logger.info(f"CSV loading complete: {count} attractions loaded")
 
+
+def _read_attractions_from_csv():
+    """Read attractions directly from the CSV file and return as list of dicts."""
+    csv_path = ROOT_DIR / "attractions.csv"
+    if not csv_path.exists():
+        return []
+
+    def to_float(value: str) -> float:
+        try:
+            return float(value)
+        except Exception:
+            return 0.0
+
+    results = []
+    with open(csv_path, "r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            results.append({
+                "id": str(uuid.uuid4()),
+                "name": row.get("Name", "") or "",
+                "city": row.get("City", "") or "",
+                "state": row.get("State", "") or "",
+                "attraction_type": row.get("Type", "") or "",
+                "rating": to_float(row.get("Google review rating", "")),
+                "entrance_fee": to_float(row.get("Entrance Fee in INR", "")),
+                "time_needed_hours": to_float(row.get("time needed to visit in hrs", "")),
+                "significance": row.get("Significance", "") or "",
+                "best_time": row.get("Best Time to visit", "") or "",
+                "weekly_off": row.get("Weekly Off", "") or "",
+                "dslr_allowed": row.get("DSLR Allowed", "") or "",
+            })
+    return results
+
 # ==================== AUTH ROUTES ====================
 
 @api_router.post("/auth/register")
@@ -1100,27 +1135,6 @@ async def get_weather(city: str = Query(...)):
 
 
 # ==================== ATTRACTIONS / TOURS ROUTE ====================
-
-class Attraction(BaseModel):
-    name: str
-    description: str
-
-@api_router.get("/attractions")
-async def get_attractions(city: str = Query(...), date: Optional[str] = Query(None)):
-    key = city.strip().upper()
-    if key not in _city_attractions:
-        raise HTTPException(status_code=404, detail="No attractions found for this city")
-
-    # Basic logic: rotate activities based on date to show some variation
-    activities = _city_attractions[key]
-    if date:
-        # pick a starting index based on date hash to add variability
-        idx = sum(ord(c) for c in date) % len(activities)
-        rotated = activities[idx:] + activities[:idx]
-    else:
-        rotated = activities
-
-    return {"city": city, "date": date, "attractions": rotated}
 # ==================== REVIEWS ROUTES ====================
 
 @api_router.post("/reviews", response_model=Review)
@@ -1268,15 +1282,34 @@ async def get_attractions(
     max_fee: Optional[float] = Query(None),
     min_rating: Optional[float] = Query(None)
 ):
-    query = {}
-    if city:
-        query["city"] = {"$regex": city, "$options": "i"}
-    if max_fee is not None:
-        query["entrance_fee"] = {"$lte": max_fee}
-    if min_rating is not None:
-        query["rating"] = {"$gte": min_rating}
+    # Always serve from CSV for deterministic, up-to-date content; fall back to Mongo only if CSV missing.
+    attractions = _read_attractions_from_csv()
 
-    attractions = await db.attractions.find(query, {"_id": 0}).to_list(1000)
+    if not attractions:
+        query = {}
+        if city:
+            query["city"] = {"$regex": city, "$options": "i"}
+        if max_fee is not None:
+            query["entrance_fee"] = {"$lte": max_fee}
+        if min_rating is not None:
+            query["rating"] = {"$gte": min_rating}
+        try:
+            attractions = await db.attractions.find(query, {"_id": 0}).to_list(1000)
+        except Exception as exc:
+            logger.warning("Mongo attractions lookup failed and CSV missing. Error=%s", exc)
+            attractions = []
+
+    # apply filters (for CSV and Mongo paths)
+    def _match(a):
+        if city and city.lower() not in a.get("city", "").lower():
+            return False
+        if max_fee is not None and float(a.get("entrance_fee", 0) or 0) > max_fee:
+            return False
+        if min_rating is not None and float(a.get("rating", 0) or 0) < min_rating:
+            return False
+        return True
+
+    attractions = [a for a in attractions if _match(a)]
     attractions.sort(key=lambda x: (-x.get("rating", 0), x.get("entrance_fee", 0)))
     return attractions
 
@@ -1361,7 +1394,7 @@ async def get_recommendations():
 
 @api_router.get("/")
 async def root():
-    return {"message": "Budget Voyage API"}
+    return {"message": "Virtual Tour Buddy API"}
 
 # Include router
 app.include_router(api_router)
@@ -1393,15 +1426,39 @@ async def ensure_flight_departure_dates():
         departure_date = (datetime.now(timezone.utc) + timedelta(days=days_left)).date().isoformat()
         await db.flights.update_one({"_id": doc["_id"]}, {"$set": {"departure_date": departure_date}})
 
-@app.on_event("startup")
-async def startup_event():
+async def _mongo_available() -> bool:
+    """Return True if MongoDB is reachable quickly; otherwise False."""
+    try:
+        await client.admin.command("ping")
+        return True
+    except Exception as exc:
+        logger.warning("MongoDB not reachable; skipping seed. Error=%s", exc)
+        return False
+
+async def _seed_all():
     await load_csv_flights()
     await seed_hotels_restaurants()
-<<<<<<< HEAD
     await ensure_flight_departure_dates()
-=======
     await load_csv_attractions()
->>>>>>> 97c3a57434d65a1e9e9fa6a84276966fc7406e96
+    logger.info("Seed task finished")
+
+@app.on_event("startup")
+async def startup_event():
+    seed_on_startup = os.environ.get("SEED_ON_STARTUP", "0") == "1"
+    seed_in_background = os.environ.get("SEED_IN_BACKGROUND", "1") == "1"
+
+    if seed_on_startup:
+        if await _mongo_available():
+            if seed_in_background:
+                asyncio.create_task(_seed_all())
+                logger.info("Seeding started in background")
+            else:
+                await _seed_all()
+        else:
+            logger.info("Skipping seed due to unavailable MongoDB")
+    else:
+        logger.info("Seed on startup disabled (SEED_ON_STARTUP=0)")
+
     logger.info("Application started")
 
 @app.on_event("shutdown")
