@@ -1394,7 +1394,7 @@ async def get_recommendations():
 
 @api_router.get("/")
 async def root():
-    return {"message": "Budget Voyage API"}
+    return {"message": "Virtual Tour Buddy API"}
 
 # Include router
 app.include_router(api_router)

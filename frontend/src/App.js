@@ -903,7 +903,24 @@ function App() {
       {/* Navigation Bar */}
       <nav className="navbar">
         <div className="navbar-content">
-          <h1 className="navbar-logo" data-testid="navbar-logo">Budget Voyage</h1>
+          <div 
+            className="navbar-logo" 
+            data-testid="navbar-logo"
+            onClick={() => navigate("/")}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && navigate("/")}
+          >
+            <div className="logo-mark">
+              <div className="logo-glow" />
+              <Compass className="logo-icon" />
+              <div className="logo-spark" />
+            </div>
+            <div className="logo-text">
+              <span className="logo-title">VTB</span>
+              <span className="logo-subtitle">Virtual Tour Buddy</span>
+            </div>
+          </div>
           <div className="navbar-actions">
             {isAuthenticated ? (
               <>
@@ -980,7 +997,7 @@ function App() {
           {/* Hero Section */}
           <div className="hero-section">
             <div className="hero-content">
-              <h1 className="hero-title" data-testid="hero-title">Budget Voyage</h1>
+              <h1 className="hero-title" data-testid="hero-title">Virtual Tour Buddy</h1>
               <p className="hero-subtitle" data-testid="hero-subtitle">
                 Find the best travel deals across flights, hotels, and restaurants
               </p>
@@ -2309,7 +2326,7 @@ function App() {
 
       {/* Footer */}
       <footer className="footer">
-        <p>Budget Voyage - Your Travel Comparison Platform</p>
+        <p>Virtual Tour Buddy - Your Travel Comparison Platform</p>
         <p className="footer-note">We compare deals from top platforms and redirect you to book directly</p>
       </footer>
     </div>
