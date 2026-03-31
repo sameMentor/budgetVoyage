@@ -18,6 +18,8 @@ import csv
 import random
 import requests
 
+from services import recommender_service
+
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
@@ -33,6 +35,7 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 
 security = HTTPBearer()
+optional_security = HTTPBearer(auto_error=False)
 
 # Create the main app
 app = FastAPI()
@@ -50,25 +53,55 @@ class UserLogin(BaseModel):
     email: EmailStr
     password: str
 
+class BudgetRange(BaseModel):
+    min: Optional[float] = None
+    max: Optional[float] = None
+
+class SeatRoomAmenities(BaseModel):
+    seat: Optional[str] = None
+    room: Optional[str] = None
+    amenities: Optional[List[str]] = Field(default_factory=list)
+
+class PreferenceItem(BaseModel):
+    item_type: Optional[str] = None
+    item_id: Optional[str] = None
+    name: Optional[str] = None
+
+class UserPreferences(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    home_city: Optional[str] = None
+    default_currency: Optional[str] = None
+    budget_range: Optional[BudgetRange] = None
+    preferred_modes: Optional[List[str]] = Field(default_factory=list)
+    stay_style: Optional[str] = None
+    food_preferences: Optional[List[str]] = Field(default_factory=list)
+    interests: Optional[List[str]] = Field(default_factory=list)
+    seat_room_amenities: Optional[SeatRoomAmenities] = None
+    typical_trip_length_days: Optional[int] = None
+    travel_frequency: Optional[str] = None
+    liked_items: Optional[List[PreferenceItem]] = Field(default_factory=list)
+    disliked_items: Optional[List[PreferenceItem]] = Field(default_factory=list)
+    not_interested: Optional[List[PreferenceItem]] = Field(default_factory=list)
+
 class User(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     email: EmailStr
     name: str
     phone: Optional[str] = None
-    preferences: Optional[dict] = {}
+    preferences: Optional[UserPreferences] = Field(default_factory=UserPreferences)
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 class UserProfile(BaseModel):
     email: EmailStr
     name: str
     phone: Optional[str] = None
-    preferences: Optional[dict] = {}
+    preferences: Optional[UserPreferences] = Field(default_factory=UserPreferences)
 
 class UpdateProfile(BaseModel):
     name: Optional[str] = None
     phone: Optional[str] = None
-    preferences: Optional[dict] = None
+    preferences: Optional[UserPreferences] = None
 
 class Flight(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -261,6 +294,24 @@ class ReviewCreate(BaseModel):
     rating: int = Field(ge=1, le=5)
     comment: str
 
+class FeedbackCreate(BaseModel):
+    item_type: str
+    item_id: Optional[str] = None
+    name: Optional[str] = None
+    action: str  # thumbs_up, thumbs_down, not_interested
+    metadata: Optional[dict] = Field(default_factory=dict)
+
+class UserVector(BaseModel):
+    user_email: str
+    vector: dict
+    updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+class EventLog(BaseModel):
+    event_type: str
+    item_type: Optional[str] = None
+    item_id: Optional[str] = None
+    metadata: Optional[dict] = Field(default_factory=dict)
+
 # Wallet models
 class Wallet(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -308,7 +359,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
 
-async def get_current_user_optional(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)):
+async def get_current_user_optional(credentials: Optional[HTTPAuthorizationCredentials] = Depends(optional_security)):
     if not credentials:
         return None
     try:
@@ -317,6 +368,132 @@ async def get_current_user_optional(credentials: Optional[HTTPAuthorizationCrede
         return payload.get("sub")
     except Exception:
         return None
+
+async def log_user_event(
+    user_email: Optional[str],
+    event_type: str,
+    item_type: Optional[str] = None,
+    item_id: Optional[str] = None,
+    metadata: Optional[dict] = None,
+):
+    """Persist lightweight behavioral signals for learning loops."""
+    if not user_email:
+        return
+
+    event_doc = {
+        "user_email": user_email,
+        "event_type": event_type,
+        "item_type": item_type,
+        "item_id": item_id,
+        "metadata": metadata or {},
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        await db.events.insert_one(event_doc)
+        await db.implicit_feedback.insert_one({**event_doc})
+    except Exception as exc:
+        logger.warning("Failed to log event %s for %s: %s", event_type, user_email, exc)
+
+
+def _stable_item_id(item_type: str, doc: dict) -> str:
+    """Derive a stable id from known fields when missing."""
+    if not doc:
+        return str(uuid.uuid4())
+    if doc.get("id"):
+        return str(doc["id"])
+    t = (item_type or "").lower()
+    if t == "flight":
+        return f"{doc.get('airline','')}-{doc.get('flight','')}-{doc.get('source_city','')}-{doc.get('destination_city','')}"
+    if t == "hotel":
+        return str(doc.get("property_id") or doc.get("uniq_id") or doc.get("name") or doc.get("property_name") or uuid.uuid4())
+    if t == "restaurant":
+        return str(doc.get("uniq_id") or doc.get("restaurant_name") or doc.get("name") or uuid.uuid4())
+    if t == "attraction":
+        return str(doc.get("id") or doc.get("Name") or f"{doc.get('name','')}-{doc.get('city','')}" or uuid.uuid4())
+    return str(uuid.uuid4())
+
+
+def _ensure_ids(item_type: str, items: list):
+    """In-place ensure each item has an 'id' field for stable references."""
+    if not isinstance(items, list):
+        return items
+    for item in items:
+        if isinstance(item, dict):
+            item["id"] = _stable_item_id(item_type, item)
+    return items
+
+
+async def save_user_vector(user_email: str, vector: dict):
+    """Cache per-user preference vector with timestamp."""
+    if not user_email or vector is None:
+        return
+    doc = {
+        "user_email": user_email,
+        "vector": vector,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.user_vectors.update_one(
+        {"user_email": user_email},
+        {"$set": doc},
+        upsert=True,
+    )
+
+
+async def _get_user_preferences(email: Optional[str]) -> Optional[dict]:
+    if not email:
+        return None
+    user = await db.users.find_one({"email": email}) or {}
+    return user.get("preferences")
+
+
+async def _get_user_vector(email: Optional[str]) -> Optional[dict]:
+    if not email:
+        return None
+    vec = await db.user_vectors.find_one({"user_email": email}, {"_id": 0})
+    return vec
+
+
+async def _append_unique_pref_item(user_email: str, field: str, entry: dict):
+    """Add an item to a preference list if not present."""
+    if not user_email:
+        return
+    item_type = entry.get("item_type")
+    item_id = entry.get("item_id")
+    name = entry.get("name")
+    query = {"email": user_email}
+    if item_id:
+        # match by both type and id when id exists
+        dup_filter = {field: {"$elemMatch": {"item_id": item_id, "item_type": item_type}}}
+    elif name:
+        dup_filter = {field: {"$elemMatch": {"name": name, "item_type": item_type}}}
+    else:
+        dup_filter = {}
+
+    existing = await db.users.find_one({**query, **dup_filter})
+    if existing:
+        return
+    await db.users.update_one(query, {"$push": {f"preferences.{field}": entry}})
+
+
+async def _recompute_user_vector(user_email: str):
+    """Very lightweight per-user vector derived from liked/disliked lists."""
+    user = await db.users.find_one({"email": user_email}) or {}
+    prefs = user.get("preferences") or {}
+    liked = prefs.get("liked_items") or []
+    disliked = prefs.get("disliked_items") or []
+
+    def _counter(items):
+        counts = {}
+        for it in items:
+            t = (it.get("item_type") or "unknown").lower()
+            counts[t] = counts.get(t, 0) + 1
+        return counts
+
+    vector = {
+        "liked_counts": _counter(liked),
+        "disliked_counts": _counter(disliked),
+    }
+    await save_user_vector(user_email, vector)
 
 # ==================== SEED DATA ====================
 
@@ -827,6 +1004,13 @@ async def create_booking(booking: BookingCreate, current_user: str = Depends(get
     )
     doc = booking_obj.model_dump()
     await db.bookings.insert_one(doc)
+    await log_user_event(
+        user_email=current_user,
+        event_type="booking",
+        item_type=booking.booking_type,
+        item_id=booking.item_id,
+        metadata={"item_details": booking.item_details},
+    )
     return booking_obj
 
 @api_router.get("/bookings", response_model=List[Booking])
@@ -846,6 +1030,13 @@ async def create_itinerary_item(item: ItineraryCreate, current_user: str = Depen
     )
     doc = itinerary_obj.model_dump()
     await db.itineraries.insert_one(doc)
+    await log_user_event(
+        user_email=current_user,
+        event_type="save_itinerary",
+        item_type=item.item_type,
+        item_id=item.item_id,
+        metadata={"item_details": item.item_details},
+    )
     return itinerary_obj
 
 @api_router.get("/itinerary", response_model=List[ItineraryItem])
@@ -858,6 +1049,12 @@ async def delete_itinerary_item(item_id: str, current_user: str = Depends(get_cu
     result = await db.itineraries.delete_one({"user_email": current_user, "id": item_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Itinerary item not found")
+    await log_user_event(
+        user_email=current_user,
+        event_type="dismiss_itinerary",
+        item_type="itinerary_item",
+        item_id=item_id,
+    )
     return {"message": "Itinerary item removed"}
 
 # ==================== SAVED TRIPS ====================
@@ -870,6 +1067,13 @@ async def save_trip(trip: SavedTripCreate, current_user: str = Depends(get_curre
         trip_details=trip.trip_details,
     )
     await db.saved_trips.insert_one(saved.model_dump())
+    await log_user_event(
+        user_email=current_user,
+        event_type="save_trip",
+        item_type="trip",
+        item_id=saved.id,
+        metadata={"title": trip.title},
+    )
     return saved
 
 @api_router.get("/trips/saved", response_model=List[SavedTrip])
@@ -882,6 +1086,12 @@ async def delete_saved_trip(trip_id: str, current_user: str = Depends(get_curren
     result = await db.saved_trips.delete_one({"user_email": current_user, "id": trip_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Saved trip not found")
+    await log_user_event(
+        user_email=current_user,
+        event_type="dismiss_trip",
+        item_type="trip",
+        item_id=trip_id,
+    )
     return {"message": "Saved trip removed"}
 
 # ==================== TRIP PLANNER ====================
@@ -974,12 +1184,17 @@ async def plan_trip(request: TripPlanRequest):
     )
 
 @api_router.post("/recommendations", response_model=RecommendationResponse)
-async def get_recommendations(request: RecommendationRequest):
+async def get_recommendations(request: RecommendationRequest, current_user: Optional[str] = Depends(get_current_user_optional)):
     from services import recommender_service
     if request.budget <= 0:
         raise HTTPException(status_code=400, detail="Budget must be greater than 0")
     if request.people <= 0:
         raise HTTPException(status_code=400, detail="People must be at least 1")
+
+    preferences = None
+    if current_user:
+        user = await db.users.find_one({"email": current_user}) or {}
+        preferences = user.get("preferences")
 
     result = recommender_service.recommend_trip(
         from_city=request.from_city,
@@ -990,6 +1205,14 @@ async def get_recommendations(request: RecommendationRequest):
         people=request.people,
         travel_mode=request.travel_mode,
         interests=request.interests,
+        preferences=preferences,
+    )
+    await log_user_event(
+        user_email=current_user,
+        event_type="search",
+        item_type="trip_plan",
+        item_id=None,
+        metadata={"request": request.model_dump(), "city": request.city},
     )
     return result
 
@@ -1010,6 +1233,13 @@ async def create_travel_buddy(buddy: TravelBuddyCreate, current_user: str = Depe
     )
     doc = buddy_obj.model_dump()
     await db.travel_buddies.insert_one(doc)
+    await log_user_event(
+        user_email=current_user,
+        event_type="buddy_post",
+        item_type="travel_buddy",
+        item_id=buddy_obj.id,
+        metadata={"destination": buddy.destination},
+    )
     return buddy_obj
 
 @api_router.get("/travel-buddies", response_model=List[TravelBuddy])
@@ -1060,6 +1290,13 @@ async def add_funds(payload: WalletAdd, current_user: str = Depends(get_current_
 
     # Return a JSON-serializable wallet (exclude internal Mongo _id)
     wallet = await db.wallets.find_one({"user_email": current_user}, {"_id": 0})
+    await log_user_event(
+        user_email=current_user,
+        event_type="wallet_topup",
+        item_type="wallet",
+        item_id=wallet.get("id") if wallet else None,
+        metadata={"amount": payload.amount, "balance": new_balance},
+    )
     return wallet
 
 # ==================== WEATHER ROUTE ====================
@@ -1151,7 +1388,39 @@ async def create_review(review: ReviewCreate, current_user: str = Depends(get_cu
         comment=review.comment,
     )
     await db.reviews.insert_one(review_obj.model_dump())
+    await log_user_event(
+        user_email=current_user,
+        event_type="review",
+        item_type=review.item_type,
+        item_id=review.item_id,
+        metadata={"rating": review.rating},
+    )
     return review_obj
+
+@api_router.post("/feedback")
+async def create_feedback(feedback: FeedbackCreate, current_user: str = Depends(get_current_user)):
+    action = feedback.action.lower()
+    entry = {
+        "item_type": feedback.item_type,
+        "item_id": feedback.item_id,
+        "name": feedback.name,
+    }
+
+    if action in {"thumbs_up", "like"}:
+        await _append_unique_pref_item(current_user, "liked_items", entry)
+        await log_user_event(current_user, "thumbs_up", feedback.item_type, feedback.item_id, feedback.metadata)
+    elif action in {"thumbs_down", "dislike"}:
+        await _append_unique_pref_item(current_user, "disliked_items", entry)
+        await log_user_event(current_user, "thumbs_down", feedback.item_type, feedback.item_id, feedback.metadata)
+    elif action == "not_interested":
+        await _append_unique_pref_item(current_user, "not_interested", entry)
+        await log_user_event(current_user, "not_interested", feedback.item_type, feedback.item_id, feedback.metadata)
+    else:
+        raise HTTPException(status_code=400, detail="Invalid feedback action")
+
+    asyncio.create_task(_recompute_user_vector(current_user))
+
+    return {"status": "recorded"}
 
 @api_router.get("/reviews")
 async def get_reviews(
@@ -1168,6 +1437,19 @@ async def get_reviews(
     reviews = await db.reviews.find(query, {"_id": 0}).sort("created_at", -1).to_list(limit)
     return reviews
 
+# ==================== EVENT LOG ROUTES ====================
+
+@api_router.post("/events")
+async def record_event(event: EventLog, current_user: str = Depends(get_current_user)):
+    await log_user_event(
+        user_email=current_user,
+        event_type=event.event_type,
+        item_type=event.item_type,
+        item_id=event.item_id,
+        metadata=event.metadata,
+    )
+    return {"status": "logged"}
+
 # ==================== FLIGHTS ROUTES ====================
 from services import flight_service
 
@@ -1179,8 +1461,20 @@ async def get_flights(
     stops: Optional[str] = Query(None),
     departure_date: Optional[str] = Query(None),
     return_date: Optional[str] = Query(None),
-    limit: int = Query(50, le=200)
+    limit: int = Query(50, le=200),
+    current_user: Optional[str] = Depends(get_current_user_optional),
 ):
+    prefs = await _get_user_preferences(current_user)
+    user_vec = await _get_user_vector(current_user)
+    search_meta = {
+        "source": source,
+        "destination": destination,
+        "max_price": max_price,
+        "stops": stops,
+        "departure_date": departure_date,
+        "return_date": return_date,
+        "limit": limit,
+    }
     # try external provider first
     external = await flight_service.search_flights(
         source=source,
@@ -1190,7 +1484,10 @@ async def get_flights(
         limit=min(limit, 20),
     )
     if external is not None:
-        return external
+        await log_user_event(current_user, "search", "flight", None, {**search_meta, "results": len(external)})
+        flights = _ensure_ids("flight", external)
+        flights = recommender_service.personalize_items("flight", flights, prefs, user_vec)
+        return flights
 
     # fallback to seeded mongodb data
     query = {}
@@ -1206,6 +1503,9 @@ async def get_flights(
         query["departure_date"] = departure_date
     
     flights = await db.flights.find(query, {"_id": 0}).sort("price", 1).to_list(limit)
+    flights = _ensure_ids("flight", flights)
+    flights = recommender_service.personalize_items("flight", flights, prefs, user_vec)
+    await log_user_event(current_user, "search", "flight", None, {**search_meta, "results": len(flights)})
     return flights
 
 # ==================== HOTELS ROUTES ====================
@@ -1215,8 +1515,16 @@ from services import booking_service
 async def get_hotels(
     city: Optional[str] = Query(None),
     max_price: Optional[float] = Query(None),
-    min_rating: Optional[float] = Query(None)
+    min_rating: Optional[float] = Query(None),
+    current_user: Optional[str] = Depends(get_current_user_optional),
 ):
+    prefs = await _get_user_preferences(current_user)
+    user_vec = await _get_user_vector(current_user)
+    search_meta = {
+        "city": city,
+        "max_price": max_price,
+        "min_rating": min_rating,
+    }
     # attempt live lookup
     external = await booking_service.search_hotels(
         city=city,
@@ -1225,7 +1533,10 @@ async def get_hotels(
         limit=20,
     )
     if external is not None:
-        return external
+        await log_user_event(current_user, "search", "hotel", None, {**search_meta, "results": len(external)})
+        hotels = _ensure_ids("hotel", external)
+        hotels = recommender_service.personalize_items("hotel", hotels, prefs, user_vec)
+        return hotels
 
     # fallback to DB
     query = {}
@@ -1238,6 +1549,9 @@ async def get_hotels(
     
     hotels = await db.hotels.find(query, {"_id": 0}).to_list(1000)
     hotels.sort(key=lambda x: x["price_per_night"])
+    hotels = _ensure_ids("hotel", hotels)
+    hotels = recommender_service.personalize_items("hotel", hotels, prefs, user_vec)
+    await log_user_event(current_user, "search", "hotel", None, {**search_meta, "results": len(hotels)})
     return hotels
 
 # ==================== RESTAURANTS ROUTES ====================
@@ -1248,8 +1562,17 @@ async def get_restaurants(
     city: Optional[str] = Query(None),
     cuisine: Optional[str] = Query(None),
     max_price: Optional[float] = Query(None),
-    min_rating: Optional[float] = Query(None)
+    min_rating: Optional[float] = Query(None),
+    current_user: Optional[str] = Depends(get_current_user_optional),
 ):
+    prefs = await _get_user_preferences(current_user)
+    user_vec = await _get_user_vector(current_user)
+    search_meta = {
+        "city": city,
+        "cuisine": cuisine,
+        "max_price": max_price,
+        "min_rating": min_rating,
+    }
     external = await tripadvisor_service.search_restaurants(
         city=city,
         cuisine=cuisine,
@@ -1258,7 +1581,10 @@ async def get_restaurants(
         limit=20,
     )
     if external is not None:
-        return external
+        await log_user_event(current_user, "search", "restaurant", None, {**search_meta, "results": len(external)})
+        restaurants = _ensure_ids("restaurant", external)
+        restaurants = recommender_service.personalize_items("restaurant", restaurants, prefs, user_vec)
+        return restaurants
 
     query = {}
     if city:
@@ -1272,6 +1598,9 @@ async def get_restaurants(
     
     restaurants = await db.restaurants.find(query, {"_id": 0}).to_list(1000)
     restaurants.sort(key=lambda x: x["avg_price"])
+    restaurants = _ensure_ids("restaurant", restaurants)
+    restaurants = recommender_service.personalize_items("restaurant", restaurants, prefs, user_vec)
+    await log_user_event(current_user, "search", "restaurant", None, {**search_meta, "results": len(restaurants)})
     return restaurants
 
 # ==================== ATTRACTIONS ROUTES ====================
@@ -1280,8 +1609,16 @@ async def get_restaurants(
 async def get_attractions(
     city: Optional[str] = Query(None),
     max_fee: Optional[float] = Query(None),
-    min_rating: Optional[float] = Query(None)
+    min_rating: Optional[float] = Query(None),
+    current_user: Optional[str] = Depends(get_current_user_optional),
 ):
+    prefs = await _get_user_preferences(current_user)
+    user_vec = await _get_user_vector(current_user)
+    search_meta = {
+        "city": city,
+        "max_fee": max_fee,
+        "min_rating": min_rating,
+    }
     # Always serve from CSV for deterministic, up-to-date content; fall back to Mongo only if CSV missing.
     attractions = _read_attractions_from_csv()
 
@@ -1311,6 +1648,9 @@ async def get_attractions(
 
     attractions = [a for a in attractions if _match(a)]
     attractions.sort(key=lambda x: (-x.get("rating", 0), x.get("entrance_fee", 0)))
+    attractions = _ensure_ids("attraction", attractions)
+    attractions = recommender_service.personalize_items("attraction", attractions, prefs, user_vec)
+    await log_user_event(current_user, "search", "attraction", None, {**search_meta, "results": len(attractions)})
     return attractions
 
 # ==================== TRAINS ROUTES ====================
@@ -1319,21 +1659,27 @@ from services import train_service
 @api_router.get("/trains", response_model=List[Train])
 async def get_trains(
     query: Optional[str] = Query(None),
-    limit: int = Query(20, le=100)
+    limit: int = Query(20, le=100),
+    current_user: Optional[str] = Depends(get_current_user_optional),
 ):
     external = await train_service.search_trains(query=query, limit=limit)
     if external is not None:
-        return external
+        await log_user_event(current_user, "search", "train", None, {"query": query, "limit": limit, "results": len(external)})
+        return _ensure_ids("train", external)
+    await log_user_event(current_user, "search", "train", None, {"query": query, "limit": limit, "results": 0})
     return []
 
 @api_router.get("/stations")
 async def get_stations(
     query: Optional[str] = Query(None),
-    limit: int = Query(20, le=100)
+    limit: int = Query(20, le=100),
+    current_user: Optional[str] = Depends(get_current_user_optional),
 ):
     external = await train_service.search_stations(query=query, limit=limit)
     if external is not None:
-        return external
+        await log_user_event(current_user, "search", "station", None, {"query": query, "limit": limit, "results": len(external)})
+        return _ensure_ids("station", external)
+    await log_user_event(current_user, "search", "station", None, {"query": query, "limit": limit, "results": 0})
     return []
 
 @api_router.get("/trains/between", response_model=List[Train])
@@ -1341,7 +1687,8 @@ async def get_trains_between(
     from_station: Optional[str] = Query(None, alias="from"),
     to_station: Optional[str] = Query(None, alias="to"),
     date: Optional[str] = Query(None),
-    limit: int = Query(50, le=200)
+    limit: int = Query(50, le=200),
+    current_user: Optional[str] = Depends(get_current_user_optional),
 ):
     external = await train_service.search_trains_between(
         from_station=from_station,
@@ -1350,7 +1697,21 @@ async def get_trains_between(
         limit=limit,
     )
     if external is not None:
+        await log_user_event(
+            current_user,
+            "search",
+            "train_between",
+            None,
+            {"from": from_station, "to": to_station, "date": date, "limit": limit, "results": len(external)},
+        )
         return external
+    await log_user_event(
+        current_user,
+        "search",
+        "train_between",
+        None,
+        {"from": from_station, "to": to_station, "date": date, "limit": limit, "results": 0},
+    )
     return []
 
 @api_router.get("/trains/between-cities", response_model=List[Train])
@@ -1358,7 +1719,8 @@ async def get_trains_between_cities(
     from_city: Optional[str] = Query(None),
     to_city: Optional[str] = Query(None),
     date: Optional[str] = Query(None),
-    limit: int = Query(50, le=200)
+    limit: int = Query(50, le=200),
+    current_user: Optional[str] = Depends(get_current_user_optional),
 ):
     external = await train_service.search_trains_between_cities(
         from_city=from_city,
@@ -1368,7 +1730,21 @@ async def get_trains_between_cities(
         limit=limit,
     )
     if external is not None:
+        await log_user_event(
+            current_user,
+            "search",
+            "train_between_cities",
+            None,
+            {"from_city": from_city, "to_city": to_city, "date": date, "limit": limit, "results": len(external)},
+        )
         return external
+    await log_user_event(
+        current_user,
+        "search",
+        "train_between_cities",
+        None,
+        {"from_city": from_city, "to_city": to_city, "date": date, "limit": limit, "results": 0},
+    )
     return []
 
 # ==================== CITIES ROUTE ====================
