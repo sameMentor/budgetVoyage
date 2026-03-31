@@ -9,3 +9,14 @@ python -m uvicorn server:app --reload --host 127.0.0.1 --port 8000
 terminal 3:
 cd d:\vtb\frontend
 yarn start
+
+
+for anushka
+
+terminal 1:
+cd backend
+python -m uvicorn server:app --reload --host 127.0.0.1 --port 8000
+
+terminal 2:
+cd frontend
+yarn start
