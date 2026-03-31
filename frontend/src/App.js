@@ -126,6 +126,8 @@ function App() {
   const [stationsFrom, setStationsFrom] = useState([]);
   const [stationsTo, setStationsTo] = useState([]);
   const [useCitySearch, setUseCitySearch] = useState(true);
+  const flightCacheRef = useRef(new Map());
+  const hotelCacheRef = useRef(new Map());
 
   useEffect(() => {
     if (token) {
@@ -150,6 +152,38 @@ function App() {
     document.documentElement.classList.toggle("dark", theme === "dark");
     localStorage.setItem("theme", theme);
   }, [theme]);
+
+  // Attach global axios interceptors for auth header and 401 handling
+  useEffect(() => {
+    const requestInterceptor = axios.interceptors.request.use((config) => {
+      const storedToken = localStorage.getItem("token");
+      if (storedToken) {
+        config.headers = config.headers || {};
+        config.headers.Authorization = `Bearer ${storedToken}`;
+      }
+      return config;
+    });
+
+    const responseInterceptor = axios.interceptors.response.use(
+      (response) => response,
+      (error) => {
+        const status = error.response?.status;
+        if (status === 401) {
+          localStorage.removeItem("token");
+          setToken("");
+          setIsAuthenticated(false);
+          setShowAuth(true);
+          toast.error("Session expired. Please log in again.");
+        }
+        return Promise.reject(error);
+      }
+    );
+
+    return () => {
+      axios.interceptors.request.eject(requestInterceptor);
+      axios.interceptors.response.eject(responseInterceptor);
+    };
+  }, []);
 
   useEffect(() => {
     if (isProfilePage && token) {
@@ -458,8 +492,17 @@ function App() {
       if (!Number.isNaN(flightMaxPriceNumeric)) params.max_price = flightMaxPriceNumeric;
       if (flightStops) params.stops = flightStops;
 
+      const cacheKey = JSON.stringify(params);
+      if (flightCacheRef.current.has(cacheKey)) {
+        setFlights(flightCacheRef.current.get(cacheKey));
+        toast.success("Loaded flights from cache");
+        setLoading(false);
+        return;
+      }
+
       const response = await axios.get(`${API}/flights`, { params });
       setFlights(response.data);
+      flightCacheRef.current.set(cacheKey, response.data);
       toast.success(`Found ${response.data.length} flights`);
     } catch (error) {
       console.error("Error fetching flights:", error);
@@ -479,8 +522,17 @@ function App() {
       if (!Number.isNaN(hotelMaxPriceNumeric)) params.max_price = hotelMaxPriceNumeric;
       if (hotelMinRating) params.min_rating = hotelMinRating;
 
+      const cacheKey = JSON.stringify(params);
+      if (hotelCacheRef.current.has(cacheKey)) {
+        setHotels(hotelCacheRef.current.get(cacheKey));
+        toast.success("Loaded hotels from cache");
+        setLoading(false);
+        return;
+      }
+
       const response = await axios.get(`${API}/hotels`, { params });
       setHotels(response.data);
+      hotelCacheRef.current.set(cacheKey, response.data);
       toast.success(`Found ${response.data.length} hotels`);
     } catch (error) {
       console.error("Error fetching hotels:", error);
@@ -900,6 +952,12 @@ function App() {
 
   return (
     <div className="app-container">
+      {loading && (
+        <div className="loading-overlay" role="status" aria-live="polite">
+          <div className="loading-spinner" />
+          <span>Loading...</span>
+        </div>
+      )}
       {/* Navigation Bar */}
       <nav className="navbar">
         <div className="navbar-content">
