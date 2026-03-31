@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Plane, Hotel, UtensilsCrossed, Train, Search, ArrowRight, Star, Clock, MapPin, User, LogOut, Heart, Calendar, MessageCircle, Users, Wallet as WalletIcon, Cloud, Sun, Moon, Landmark, Compass } from "lucide-react";
+import { Plane, Hotel, UtensilsCrossed, Train, Search, ArrowRight, Star, Clock, MapPin, User, LogOut, Heart, Calendar, MessageCircle, Users, Wallet as WalletIcon, Cloud, Sun, Moon, Landmark, Compass, ThumbsUp, ThumbsDown, Ban } from "lucide-react";
 import { toast } from "sonner";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -50,6 +50,19 @@ function App() {
   const [profileTab, setProfileTab] = useState("account");
   const [profileName, setProfileName] = useState("");
   const [profilePhone, setProfilePhone] = useState("");
+  const [prefHomeCity, setPrefHomeCity] = useState("");
+  const [prefDefaultCurrency, setPrefDefaultCurrency] = useState("INR");
+  const [prefBudgetMin, setPrefBudgetMin] = useState("");
+  const [prefBudgetMax, setPrefBudgetMax] = useState("");
+  const [prefPreferredModes, setPrefPreferredModes] = useState([]);
+  const [prefStayStyle, setPrefStayStyle] = useState("");
+  const [prefFoodPrefs, setPrefFoodPrefs] = useState("");
+  const [prefInterests, setPrefInterests] = useState("");
+  const [prefSeatPref, setPrefSeatPref] = useState("");
+  const [prefRoomPref, setPrefRoomPref] = useState("");
+  const [prefAmenityPref, setPrefAmenityPref] = useState("");
+  const [prefTripLength, setPrefTripLength] = useState("");
+  const [prefTravelFrequency, setPrefTravelFrequency] = useState("");
 
   // Theme
   const [theme, setTheme] = useState(localStorage.getItem("theme") || "light");
@@ -202,6 +215,38 @@ function App() {
     }
   };
 
+  const sendFeedback = async (itemType, itemId, name, action) => {
+    if (!isAuthenticated) {
+      toast.error("Please login to give feedback");
+      setShowAuth(true);
+      return;
+    }
+    try {
+      await axios.post(
+        `${API}/feedback`,
+        { item_type: itemType, item_id: itemId, name, action },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      toast.success(action === "not_interested" ? "We will hide similar items" : "Thanks for the feedback!");
+
+      if (action === "not_interested") {
+        if (itemType === "flight") {
+          setFlights((prev) => prev.filter((f) => f.id !== itemId));
+        } else if (itemType === "hotel") {
+          setHotels((prev) => prev.filter((h) => h.id !== itemId));
+        } else if (itemType === "restaurant") {
+          setRestaurants((prev) => prev.filter((r) => r.id !== itemId));
+        } else if (itemType === "attraction") {
+          setAttractions((prev) => prev.filter((a) => (a.id || a.name) !== (itemId || name)));
+        }
+      }
+    } catch (error) {
+      console.error("Feedback error:", error);
+      const detail = error.response?.data?.detail || error.message;
+      toast.error(`Failed to send feedback: ${detail}`);
+    }
+  };
+
   const handleAuth = async () => {
     try {
       const endpoint = isLogin ? "/auth/login" : "/auth/register";
@@ -225,6 +270,113 @@ function App() {
     }
   };
 
+  const parseCsvList = (value) =>
+    value
+      ? value
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [];
+
+  function applyPreferencesToForms(prefs = {}) {
+    if (!prefs) return;
+    if (prefs.home_city) {
+      if (!flightSource) setFlightSource(prefs.home_city);
+      if (!hotelCity) setHotelCity(prefs.home_city);
+      if (!restaurantCity) setRestaurantCity(prefs.home_city);
+      if (!attractionCity) setAttractionCity(prefs.home_city);
+      if (!tripFromCity) setTripFromCity(prefs.home_city);
+      if (!stationQueryFrom) setStationQueryFrom(prefs.home_city);
+    }
+
+    if (prefs.budget_range?.max !== undefined && prefs.budget_range?.max !== null) {
+      if (flightMaxPriceRef.current && !flightMaxPriceRef.current.value) {
+        flightMaxPriceRef.current.value = prefs.budget_range.max;
+      }
+      if (hotelMaxPriceRef.current && !hotelMaxPriceRef.current.value) {
+        hotelMaxPriceRef.current.value = prefs.budget_range.max;
+      }
+      if (!tripBudget) setTripBudget(String(prefs.budget_range.max));
+    }
+
+    if (prefs.food_preferences?.length && !restaurantCuisine) {
+      setRestaurantCuisine(prefs.food_preferences[0]);
+    }
+
+    if (prefs.preferred_modes?.length && tripMode === "Train") {
+      setTripMode(prefs.preferred_modes[0]);
+    }
+
+    if (prefs.interests?.length && !tripInterests) {
+      setTripInterests(prefs.interests.join(", "));
+    }
+  }
+
+  const hydratePreferenceState = (prefs = {}) => {
+    setPrefHomeCity(prefs.home_city || "");
+    setPrefDefaultCurrency(prefs.default_currency || "INR");
+    setPrefBudgetMin(
+      prefs.budget_range?.min !== undefined && prefs.budget_range?.min !== null
+        ? String(prefs.budget_range.min)
+        : ""
+    );
+    setPrefBudgetMax(
+      prefs.budget_range?.max !== undefined && prefs.budget_range?.max !== null
+        ? String(prefs.budget_range.max)
+        : ""
+    );
+    setPrefPreferredModes(prefs.preferred_modes || []);
+    setPrefStayStyle(prefs.stay_style || "");
+    setPrefFoodPrefs((prefs.food_preferences || []).join(", "));
+    setPrefInterests((prefs.interests || []).join(", "));
+    setPrefSeatPref(prefs.seat_room_amenities?.seat || "");
+    setPrefRoomPref(prefs.seat_room_amenities?.room || "");
+    setPrefAmenityPref((prefs.seat_room_amenities?.amenities || []).join(", "));
+    setPrefTripLength(
+      prefs.typical_trip_length_days !== undefined && prefs.typical_trip_length_days !== null
+        ? String(prefs.typical_trip_length_days)
+        : ""
+    );
+    setPrefTravelFrequency(prefs.travel_frequency || "");
+    applyPreferencesToForms(prefs);
+  };
+
+  const buildPreferencesPayload = () => {
+    const budgetRange =
+      prefBudgetMin || prefBudgetMax
+        ? {
+            min: prefBudgetMin ? Number(prefBudgetMin) : undefined,
+            max: prefBudgetMax ? Number(prefBudgetMax) : undefined,
+          }
+        : undefined;
+
+    const seatRoomAmenities =
+      prefSeatPref || prefRoomPref || prefAmenityPref
+        ? {
+            seat: prefSeatPref || undefined,
+            room: prefRoomPref || undefined,
+            amenities: parseCsvList(prefAmenityPref),
+          }
+        : undefined;
+
+    const preferredModes = prefPreferredModes.length ? prefPreferredModes : undefined;
+    const foodPrefs = parseCsvList(prefFoodPrefs);
+    const interestList = parseCsvList(prefInterests);
+
+    return {
+      home_city: prefHomeCity || undefined,
+      default_currency: prefDefaultCurrency || undefined,
+      budget_range: budgetRange,
+      preferred_modes: preferredModes,
+      stay_style: prefStayStyle || undefined,
+      food_preferences: foodPrefs.length ? foodPrefs : undefined,
+      interests: interestList.length ? interestList : undefined,
+      seat_room_amenities: seatRoomAmenities,
+      typical_trip_length_days: prefTripLength ? Number(prefTripLength) : undefined,
+      travel_frequency: prefTravelFrequency || undefined,
+    };
+  };
+
   const fetchProfile = async () => {
     try {
       const response = await axios.get(`${API}/profile`, {
@@ -233,6 +385,7 @@ function App() {
       setUser(response.data);
       setProfileName(response.data.name);
       setProfilePhone(response.data.phone || "");
+      hydratePreferenceState(response.data.preferences || {});
     } catch (error) {
       console.error("Error fetching profile:", error);
     }
@@ -240,12 +393,19 @@ function App() {
 
   const updateProfile = async () => {
     try {
+      const preferencesPayload = buildPreferencesPayload();
+      const payload = {
+        name: profileName,
+        phone: profilePhone,
+        preferences: preferencesPayload,
+      };
       await axios.put(
         `${API}/profile`,
-        { name: profileName, phone: profilePhone },
+        payload,
         { headers: { Authorization: `Bearer ${token}` } }
       );
       toast.success("Profile updated!");
+      applyPreferencesToForms(preferencesPayload);
       fetchProfile();
     } catch (error) {
       const status = error.response?.status;
@@ -258,6 +418,35 @@ function App() {
       }
       toast.error(`Failed to update profile: ${detail}`);
     }
+  };
+
+  const togglePreferredMode = (mode) => {
+    setPrefPreferredModes((prev) =>
+      prev.includes(mode) ? prev.filter((m) => m !== mode) : [...prev, mode]
+    );
+  };
+
+  const getRecommendationReason = (type, item) => {
+    const parts = [];
+    if (type === "restaurant" && prefFoodPrefs) parts.push(`Matches your food preferences: ${prefFoodPrefs}`);
+    if (type === "restaurant" && prefBudgetMax) parts.push("Budget-friendly pick");
+    if (type === "hotel" && prefStayStyle) parts.push(`Stay style: ${prefStayStyle}`);
+    if (type === "hotel" && prefBudgetMax) parts.push("Within your budget band");
+    if (type === "flight" && prefPreferredModes.includes("Flight")) parts.push("You prefer flights");
+    if (type === "flight" && prefBudgetMax) parts.push("Cheaper option for your budget");
+    if (type === "attraction" && prefInterests) parts.push(`Matches interests: ${prefInterests}`);
+    if (parts.length === 0 && item?.recommended_score) parts.push(`Recommended score ${item.recommended_score}`);
+    return parts.join(" • ");
+  };
+
+  const refreshRecommendations = async () => {
+    toast.message("Refreshing with your preferences...");
+    await Promise.all([
+      searchFlights(),
+      searchHotels(),
+      searchRestaurants(),
+      searchAttractions(),
+    ]).catch(() => {});
   };
 
   const fetchBookings = async () => {
@@ -1212,6 +1401,11 @@ function App() {
                         Best Deal
                       </Badge>
                     )}
+                    {flight.recommended && (
+                      <Badge variant="outline" className="recommended-badge">
+                        Recommended for you
+                      </Badge>
+                    )}
                     <CardHeader>
                       <CardTitle className="result-card-title">{flight.airline}</CardTitle>
                       <CardDescription className="flight-number">{flight.flight}</CardDescription>
@@ -1264,6 +1458,22 @@ function App() {
                         >
                           Write Review
                         </Button>
+                        <div className="feedback-group">
+                          <Button variant="ghost" size="icon" onClick={() => sendFeedback("flight", flight.id, flight.flight, "thumbs_up")} title="Like">
+                            <ThumbsUp className="btn-icon" />
+                          </Button>
+                          <Button variant="ghost" size="icon" onClick={() => sendFeedback("flight", flight.id, flight.flight, "thumbs_down")} title="Dislike">
+                            <ThumbsDown className="btn-icon" />
+                          </Button>
+                          <Button variant="ghost" size="icon" onClick={() => sendFeedback("flight", flight.id, flight.flight, "not_interested")} title="Hide similar">
+                            <Ban className="btn-icon" />
+                          </Button>
+                        </div>
+                        {flight.recommended && (
+                          <div className="recommendation-reason">
+                            {getRecommendationReason("flight", flight)}
+                          </div>
+                        )}
                       </div>
                     </CardContent>
                   </Card>
@@ -1522,6 +1732,11 @@ function App() {
                     {index === getBestDealIndex(hotels, "price_per_night") && (
                       <Badge className="best-deal-badge" data-testid={`hotel-best-deal-badge-${index}`}>Best Deal</Badge>
                     )}
+                    {hotel.recommended && (
+                      <Badge variant="outline" className="recommended-badge">
+                        Recommended for you
+                      </Badge>
+                    )}
                     <div className="hotel-image" style={{backgroundImage: `url(${hotel.image_url})`}}></div>
                     <CardHeader>
                       <CardTitle className="result-card-title">{hotel.name}</CardTitle>
@@ -1562,6 +1777,22 @@ function App() {
                         >
                           Write Review
                         </Button>
+                        <div className="feedback-group">
+                          <Button variant="ghost" size="icon" onClick={() => sendFeedback("hotel", hotel.id, hotel.name, "thumbs_up")} title="Like">
+                            <ThumbsUp className="btn-icon" />
+                          </Button>
+                          <Button variant="ghost" size="icon" onClick={() => sendFeedback("hotel", hotel.id, hotel.name, "thumbs_down")} title="Dislike">
+                            <ThumbsDown className="btn-icon" />
+                          </Button>
+                          <Button variant="ghost" size="icon" onClick={() => sendFeedback("hotel", hotel.id, hotel.name, "not_interested")} title="Hide similar">
+                            <Ban className="btn-icon" />
+                          </Button>
+                        </div>
+                        {hotel.recommended && (
+                          <div className="recommendation-reason">
+                            {getRecommendationReason("hotel", hotel)}
+                          </div>
+                        )}
                       </div>
                     </CardContent>
                   </Card>
@@ -1634,6 +1865,11 @@ function App() {
                     {index === getBestDealIndex(restaurants, "avg_price") && (
                       <Badge className="best-deal-badge" data-testid={`restaurant-best-deal-badge-${index}`}>Best Value</Badge>
                     )}
+                    {restaurant.recommended && (
+                      <Badge variant="outline" className="recommended-badge">
+                        Recommended for you
+                      </Badge>
+                    )}
                     <div className="restaurant-image" style={{backgroundImage: `url(${restaurant.image_url})`}}></div>
                     <CardHeader>
                       <CardTitle className="result-card-title">{restaurant.name}</CardTitle>
@@ -1673,6 +1909,22 @@ function App() {
                         >
                           Write Review
                         </Button>
+                        <div className="feedback-group">
+                          <Button variant="ghost" size="icon" onClick={() => sendFeedback("restaurant", restaurant.id, restaurant.name, "thumbs_up")} title="Like">
+                            <ThumbsUp className="btn-icon" />
+                          </Button>
+                          <Button variant="ghost" size="icon" onClick={() => sendFeedback("restaurant", restaurant.id, restaurant.name, "thumbs_down")} title="Dislike">
+                            <ThumbsDown className="btn-icon" />
+                          </Button>
+                          <Button variant="ghost" size="icon" onClick={() => sendFeedback("restaurant", restaurant.id, restaurant.name, "not_interested")} title="Hide similar">
+                            <Ban className="btn-icon" />
+                          </Button>
+                        </div>
+                        {restaurant.recommended && (
+                          <div className="recommendation-reason">
+                            {getRecommendationReason("restaurant", restaurant)}
+                          </div>
+                        )}
                       </div>
                     </CardContent>
                   </Card>
@@ -1812,6 +2064,11 @@ function App() {
               <div className="results-grid">
                 {attractions.map((attraction, index) => (
                   <Card key={attraction.id || index} className="result-card attraction-card" data-testid={`attraction-card-${index}`}>
+                    {attraction.recommended && (
+                      <Badge variant="outline" className="recommended-badge">
+                        Recommended for you
+                      </Badge>
+                    )}
                     <CardHeader>
                       <CardTitle className="result-card-title">{attraction.name}</CardTitle>
                       <CardDescription>
@@ -1839,6 +2096,22 @@ function App() {
                       >
                         Save to Itinerary <ArrowRight className="btn-icon" />
                       </Button>
+                      <div className="feedback-group">
+                        <Button variant="ghost" size="icon" onClick={() => sendFeedback("attraction", attraction.id, attraction.name, "thumbs_up")} title="Like">
+                          <ThumbsUp className="btn-icon" />
+                        </Button>
+                        <Button variant="ghost" size="icon" onClick={() => sendFeedback("attraction", attraction.id, attraction.name, "thumbs_down")} title="Dislike">
+                          <ThumbsDown className="btn-icon" />
+                        </Button>
+                        <Button variant="ghost" size="icon" onClick={() => sendFeedback("attraction", attraction.id, attraction.name, "not_interested")} title="Hide similar">
+                          <Ban className="btn-icon" />
+                        </Button>
+                      </div>
+                      {attraction.recommended && (
+                        <div className="recommendation-reason">
+                          {getRecommendationReason("attraction", attraction)}
+                        </div>
+                      )}
                     </CardContent>
                   </Card>
                 ))}
@@ -2025,6 +2298,7 @@ function App() {
                   <Tabs value={profileTab} onValueChange={setProfileTab} className="tabs-container">
                     <TabsList className="tabs-list">
                       <TabsTrigger value="account" className="tab-trigger">Account</TabsTrigger>
+                      <TabsTrigger value="preferences" className="tab-trigger">Preferences</TabsTrigger>
                       <TabsTrigger value="itinerary" className="tab-trigger">Itinerary</TabsTrigger>
                       <TabsTrigger value="bookings" className="tab-trigger">Bookings</TabsTrigger>
                       <TabsTrigger value="trips" className="tab-trigger">Saved Trips</TabsTrigger>
@@ -2056,6 +2330,123 @@ function App() {
                       <div className="buddy-actions">
                         <Button onClick={updateProfile} data-testid="profile-update-btn">Update Profile</Button>
                         <Button variant="outline" onClick={() => navigate("/")} data-testid="profile-back-btn">Back Home</Button>
+                      </div>
+                    </div>
+                  </div>
+                  </TabsContent>
+                  <TabsContent value="preferences" className="tab-content">
+                  <div className="profile-section">
+                    <h3 className="section-title">Travel Preferences</h3>
+                    <div className="profile-form preferences-grid">
+                      <Select value={prefHomeCity} onValueChange={setPrefHomeCity}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Home city" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {cities.map((city) => (
+                            <SelectItem key={city} value={city}>{city}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Select value={prefDefaultCurrency} onValueChange={setPrefDefaultCurrency}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Default currency" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="INR">INR â‚¹</SelectItem>
+                          <SelectItem value="USD">USD $</SelectItem>
+                          <SelectItem value="EUR">EUR â‚¬</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Input
+                        type="number"
+                        placeholder="Budget min"
+                        value={prefBudgetMin}
+                        onChange={(e) => setPrefBudgetMin(e.target.value)}
+                      />
+                      <Input
+                        type="number"
+                        placeholder="Budget max"
+                        value={prefBudgetMax}
+                        onChange={(e) => setPrefBudgetMax(e.target.value)}
+                      />
+                      <div className="checkbox-row">
+                        <label className="filter-label">Preferred modes</label>
+                        <div className="chip-row">
+                          {["Flight", "Train"].map((mode) => (
+                            <Button
+                              key={mode}
+                              type="button"
+                              variant={prefPreferredModes.includes(mode) ? "default" : "outline"}
+                              onClick={() => togglePreferredMode(mode)}
+                              size="sm"
+                            >
+                              {mode}
+                            </Button>
+                          ))}
+                        </div>
+                      </div>
+                      <Select value={prefStayStyle} onValueChange={setPrefStayStyle}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Stay style" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="budget">Budget</SelectItem>
+                          <SelectItem value="boutique">Boutique</SelectItem>
+                          <SelectItem value="luxury">Luxury</SelectItem>
+                          <SelectItem value="apartment">Apartment</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Input
+                        placeholder="Food preferences (comma separated)"
+                        value={prefFoodPrefs}
+                        onChange={(e) => setPrefFoodPrefs(e.target.value)}
+                      />
+                      <Input
+                        placeholder="Interests / tags (comma separated)"
+                        value={prefInterests}
+                        onChange={(e) => setPrefInterests(e.target.value)}
+                      />
+                      <Input
+                        placeholder="Seat preference (aisle/window/etc.)"
+                        value={prefSeatPref}
+                        onChange={(e) => setPrefSeatPref(e.target.value)}
+                      />
+                      <Input
+                        placeholder="Room preference (suite/deluxe/etc.)"
+                        value={prefRoomPref}
+                        onChange={(e) => setPrefRoomPref(e.target.value)}
+                      />
+                      <Input
+                        placeholder="Amenity must-haves (comma separated)"
+                        value={prefAmenityPref}
+                        onChange={(e) => setPrefAmenityPref(e.target.value)}
+                      />
+                      <Input
+                        type="number"
+                        placeholder="Typical trip length (days)"
+                        value={prefTripLength}
+                        onChange={(e) => setPrefTripLength(e.target.value)}
+                      />
+                      <Select value={prefTravelFrequency} onValueChange={setPrefTravelFrequency}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Travel frequency" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="rarely">Rarely</SelectItem>
+                          <SelectItem value="quarterly">Quarterly</SelectItem>
+                          <SelectItem value="monthly">Monthly</SelectItem>
+                          <SelectItem value="weekly">Weekly</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <div className="buddy-actions">
+                        <Button onClick={updateProfile}>Save Preferences</Button>
+                        <Button variant="secondary" onClick={refreshRecommendations}>
+                          Refresh Recommendations
+                        </Button>
+                        <Button variant="outline" onClick={() => applyPreferencesToForms(buildPreferencesPayload())}>
+                          Apply as Defaults
+                        </Button>
                       </div>
                     </div>
                   </div>
